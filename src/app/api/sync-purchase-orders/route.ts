@@ -19,12 +19,14 @@ type SigmaPurchaseOrder = {
 };
 
 type OcPageResponse = {
-  data?: SigmaPurchaseOrder[];
-  pagination?: {
-    total?: number;
-    per_page?: number;
-    current_page?: number;
-    last_page?: number;
+  data?: {
+    purchase_orders?: SigmaPurchaseOrder[];
+    pagination?: {
+      total?: number;
+      per_page?: number;
+      current_page?: number;
+      last_page?: number;
+    };
   };
 };
 
@@ -176,24 +178,28 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const list = Array.isArray(payload.data) ? payload.data : [];
-      lastPage = payload.pagination?.last_page ?? page;
+      const list = Array.isArray(payload.data?.purchase_orders)
+        ? payload.data.purchase_orders
+        : [];
+      const pagination = payload.data?.pagination;
+      lastPage = pagination?.last_page ?? page;
       pagesFetched += 1;
 
       for (const po of list) {
+        if (mode === "recent") {
+          const poDate = toDateOnly(po.creation_date);
+          if (poDate != null && poDate < cutoff) {
+            stoppedEarly = true;
+            break;
+          }
+          if (poDate == null || poDate < cutoff) continue;
+        }
+
         const row = toRow(po, syncedAt);
         if (row) collected.push(row);
       }
 
-      if (mode === "recent") {
-        const lastPo = list[list.length - 1];
-        const lastDate = toDateOnly(lastPo?.creation_date);
-        if (lastDate != null && lastDate < cutoff) {
-          stoppedEarly = true;
-          break;
-        }
-      }
-
+      if (stoppedEarly) break;
       if (page >= lastPage) break;
       page += 1;
     }
