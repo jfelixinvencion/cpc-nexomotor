@@ -1,178 +1,584 @@
-const features = [
-  {
-    title: "Inventario",
-    description:
-      "Control total de vehículos, repuestos y stock en tiempo real.",
-    icon: (
-      <svg
-        className="h-6 w-6"
-        fill="none"
-        viewBox="0 0 24 24"
-        strokeWidth={1.5}
-        stroke="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"
-        />
-      </svg>
-    ),
-  },
-  {
-    title: "Taller",
-    description:
-      "Órdenes de servicio, seguimiento de reparaciones y historial por vehículo.",
-    icon: (
-      <svg
-        className="h-6 w-6"
-        fill="none"
-        viewBox="0 0 24 24"
-        strokeWidth={1.5}
-        stroke="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.671m8.717-8.717A48.108 48.108 0 0 0 12 3.75c-2.335 0-4.575.445-6.632 1.242C3.582 5.757 2.25 7.457 2.25 9.75v.75c0 .414.336.75.75.75h.75a.75.75 0 0 0 .75-.75v-.75c0-1.036.84-1.875 1.875-1.875h1.5c1.036 0 1.875.84 1.875 1.875v.75a.75.75 0 0 0 .75.75h.75a.75.75 0 0 0 .75-.75v-.75c0-2.293-1.332-3.993-3.368-4.758A48.108 48.108 0 0 1 12 3.75Z"
-        />
-      </svg>
-    ),
-  },
-  {
-    title: "Ventas",
-    description:
-      "Cotizaciones, facturación y seguimiento comercial en un solo lugar.",
-    icon: (
-      <svg
-        className="h-6 w-6"
-        fill="none"
-        viewBox="0 0 24 24"
-        strokeWidth={1.5}
-        stroke="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z"
-        />
-      </svg>
-    ),
-  },
-];
+"use client";
 
-export default function Home() {
+import { FormEvent, type ReactNode, useState } from "react";
+import {
+  ArrowLeft,
+  Boxes,
+  Car,
+  ClipboardList,
+  LogOut,
+  Package,
+  Settings,
+  Shield,
+  Users,
+  Wrench,
+} from "lucide-react";
+
+type View = "landing" | "login" | "dashboard" | "warehouse";
+type WarehouseTab = "herramientas" | "consumibles";
+
+const MOCK_USER = "Admin";
+const MOCK_PASSWORD = "NexoMotor";
+
+const areaBlocks = [
+  {
+    id: "almacen",
+    title: "ALMACÉN",
+    description: "Herramientas, consumibles e inventario del taller.",
+    icon: Boxes,
+    active: true,
+    accent: "bg-accent text-white",
+    iconBg: "bg-white/20",
+  },
+  {
+    id: "operaciones",
+    title: "OPERACIONES",
+    description: "Órdenes de trabajo y seguimiento de servicios.",
+    icon: ClipboardList,
+    active: false,
+    accent: "bg-slate-100 text-slate-500",
+    iconBg: "bg-slate-200/70",
+  },
+  {
+    id: "clientes",
+    title: "CLIENTES",
+    description: "Base de clientes y historial de vehículos.",
+    icon: Users,
+    active: false,
+    accent: "bg-slate-100 text-slate-500",
+    iconBg: "bg-slate-200/70",
+  },
+  {
+    id: "configuracion",
+    title: "CONFIGURACIÓN",
+    description: "Preferencias del sistema y accesos.",
+    icon: Settings,
+    active: false,
+    accent: "bg-slate-100 text-slate-500",
+    iconBg: "bg-slate-200/70",
+  },
+] as const;
+
+function Logo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-surface/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-white">
-              <svg
-                className="h-5 w-5"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-                aria-hidden="true"
+    <div className="flex items-center gap-2.5">
+      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent shadow-md shadow-accent/25">
+        <Car className="h-5 w-5 text-white" strokeWidth={2.25} aria-hidden />
+        <Wrench
+          className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-accent-light p-0.5 text-white shadow-sm"
+          strokeWidth={2.5}
+          aria-hidden
+        />
+      </div>
+      <div className={compact ? "hidden sm:block" : "block"}>
+        <p className="text-base font-bold leading-tight tracking-tight text-foreground sm:text-lg">
+          Nexo Motor
+        </p>
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted">
+          Taller &amp; Almacén
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AppShell({
+  children,
+  onLogin,
+  onLogout,
+  isAuthenticated,
+  showBack,
+  onBack,
+  backLabel,
+}: {
+  children: ReactNode;
+  onLogin?: () => void;
+  onLogout?: () => void;
+  isAuthenticated: boolean;
+  showBack?: boolean;
+  onBack?: () => void;
+  backLabel?: string;
+}) {
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-background">
+      <div
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_10%_-10%,rgba(30,58,138,0.14),transparent),radial-gradient(ellipse_60%_50%_at_90%_0%,rgba(59,130,246,0.12),transparent),radial-gradient(ellipse_50%_40%_at_50%_100%,rgba(148,163,184,0.18),transparent)]"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.35] [background-image:linear-gradient(rgba(148,163,184,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]"
+        aria-hidden
+      />
+
+      <header className="relative z-10 border-b border-border/80 bg-surface/80 backdrop-blur-md">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {showBack && onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"
-                />
-              </svg>
-            </div>
-            <span className="text-lg font-semibold tracking-tight">Nexomotor</span>
+                <ArrowLeft className="h-4 w-4" aria-hidden />
+                <span className="hidden sm:inline">{backLabel ?? "Volver"}</span>
+              </button>
+            ) : null}
+            <Logo compact />
           </div>
-          <span className="hidden text-sm text-muted sm:block">
-            Gestión Automotriz
-          </span>
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            {isAuthenticated ? (
+              <>
+                <span className="hidden items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent sm:inline-flex">
+                  <Shield className="h-3.5 w-3.5" aria-hidden />
+                  {MOCK_USER}
+                </span>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  <LogOut className="h-4 w-4" aria-hidden />
+                  <span className="hidden sm:inline">Salir</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onLogin}
+                className="inline-flex items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-accent/25 transition hover:bg-accent-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                Iniciar Sesión
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Hero */}
-      <main>
-        <section className="relative overflow-hidden">
-          <div
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-accent/10 via-background to-background"
-            aria-hidden="true"
-          />
-          <div className="relative mx-auto max-w-6xl px-6 py-24 sm:py-32">
-            <div className="mx-auto max-w-3xl text-center">
-              <p className="mb-4 inline-flex items-center rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-muted">
-                Plataforma integral para el sector automotriz
-              </p>
-              <h1 className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl lg:text-6xl">
-                Nexomotor:{" "}
-                <span className="text-accent">Gestión Automotriz</span>
-              </h1>
-              <p className="mt-6 text-lg leading-8 text-muted sm:text-xl">
-                Optimiza tu taller, concesionario o flota con una solución
-                moderna, centralizada y diseñada para el día a día del negocio
-                automotriz.
-              </p>
-              <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-accent-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                >
-                  Comenzar ahora
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-6 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-border/50"
-                >
-                  Ver demo
-                </button>
+      <main className="relative z-10">{children}</main>
+    </div>
+  );
+}
+
+function LandingView({ onLogin }: { onLogin: () => void }) {
+  return (
+    <section className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-20 lg:py-24">
+      <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-14">
+        <div className="order-2 text-center lg:order-1 lg:text-left">
+          <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/5 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-accent">
+            <Wrench className="h-3.5 w-3.5" aria-hidden />
+            Taller profesional
+          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl lg:text-5xl">
+            Nexo Motor
+          </h1>
+          <p className="mt-4 text-base leading-relaxed text-slate-600 sm:text-lg">
+            Mantenimiento preventivo y correctivo de autos ligeros. Gestiona tu
+            taller, almacén y operaciones desde un centro de mandos claro y
+            ágil.
+          </p>
+          <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row lg:justify-start">
+            <button
+              type="button"
+              onClick={onLogin}
+              className="inline-flex items-center justify-center rounded-xl bg-accent px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-accent/30 transition hover:bg-accent-dark hover:shadow-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              Iniciar Sesión
+            </button>
+            <a
+              href="#servicios"
+              className="inline-flex items-center justify-center rounded-xl border border-border bg-surface px-6 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              Conocer más
+            </a>
+          </div>
+        </div>
+
+        <div className="order-1 flex justify-center lg:order-2">
+          <div className="relative w-full max-w-md">
+            <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-br from-accent/20 via-accent-light/15 to-slate-200/40 blur-2xl" aria-hidden />
+            <div className="relative overflow-hidden rounded-3xl border border-white/70 bg-surface/90 p-8 shadow-xl shadow-slate-300/40 backdrop-blur sm:p-10">
+              <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-3xl bg-gradient-to-br from-accent to-accent-light shadow-lg shadow-accent/30 sm:h-32 sm:w-32">
+                <Car className="h-14 w-14 text-white sm:h-16 sm:w-16" strokeWidth={1.5} aria-hidden />
+              </div>
+              <div className="mt-8 grid grid-cols-3 gap-3">
+                {[
+                  { icon: Wrench, label: "Taller" },
+                  { icon: Package, label: "Stock" },
+                  { icon: Shield, label: "Calidad" },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    className="flex flex-col items-center gap-2 rounded-2xl bg-slate-50 px-2 py-4 transition hover:bg-accent/5"
+                  >
+                    <item.icon className="h-5 w-5 text-accent" aria-hidden />
+                    <span className="text-xs font-semibold text-slate-600">
+                      {item.label}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
-        </section>
-
-        {/* Features */}
-        <section className="border-t border-border bg-surface/50 py-20">
-          <div className="mx-auto max-w-6xl px-6">
-            <div className="mx-auto max-w-2xl text-center">
-              <h2 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-                Todo lo que necesitas para operar
-              </h2>
-              <p className="mt-3 text-muted">
-                Módulos integrados para cada área de tu negocio automotriz.
-              </p>
-            </div>
-            <div className="mt-14 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-              {features.map((feature) => (
-                <article
-                  key={feature.title}
-                  className="rounded-2xl border border-border bg-surface p-6 shadow-sm transition-shadow hover:shadow-md"
-                >
-                  <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                    {feature.icon}
-                  </div>
-                  <h3 className="text-lg font-semibold text-foreground">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-muted">
-                    {feature.description}
-                  </p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-border py-8">
-        <div className="mx-auto max-w-6xl px-6 text-center text-sm text-muted">
-          © {new Date().getFullYear()} Nexomotor. Gestión Automotriz.
         </div>
-      </footer>
-    </div>
+      </div>
+
+      <div id="servicios" className="mt-16 grid gap-4 sm:grid-cols-3 sm:gap-5">
+        {[
+          {
+            title: "Preventivo",
+            text: "Programación clara de servicios para evitar fallas costosas.",
+          },
+          {
+            title: "Correctivo",
+            text: "Diagnóstico y reparación con control de piezas y tiempos.",
+          },
+          {
+            title: "Almacén",
+            text: "Herramientas y consumibles organizados para el día a día.",
+          },
+        ].map((item) => (
+          <article
+            key={item.title}
+            className="rounded-2xl border border-border/80 bg-surface/90 p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+          >
+            <h2 className="text-sm font-bold uppercase tracking-wide text-accent">
+              {item.title}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              {item.text}
+            </p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LoginView({
+  onSuccess,
+  onCancel,
+}: {
+  onSuccess: () => void;
+  onCancel: () => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (username.trim() === MOCK_USER && password === MOCK_PASSWORD) {
+      setError("");
+      onSuccess();
+      return;
+    }
+    setError("Usuario o contraseña incorrectos.");
+    setShake(true);
+    window.setTimeout(() => setShake(false), 450);
+  }
+
+  return (
+    <section className="mx-auto flex max-w-6xl items-center justify-center px-4 py-12 sm:px-6 sm:py-20">
+      <div
+        className={`w-full max-w-md rounded-3xl border border-border/80 bg-surface p-6 shadow-xl shadow-slate-300/40 transition sm:p-8 ${
+          shake ? "animate-shake" : ""
+        }`}
+      >
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-white shadow-md shadow-accent/30">
+            <Shield className="h-7 w-7" aria-hidden />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Acceso al sistema
+          </h1>
+          <p className="mt-2 text-sm text-muted">
+            Ingresa con tus credenciales de administrador.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label
+              htmlFor="username"
+              className="mb-1.5 block text-sm font-semibold text-slate-700"
+            >
+              Usuario
+            </label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full rounded-xl border border-border bg-slate-50 px-4 py-3 text-sm text-foreground outline-none transition focus:border-accent focus:bg-white focus:ring-2 focus:ring-accent/20"
+              placeholder="Admin"
+              required
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="password"
+              className="mb-1.5 block text-sm font-semibold text-slate-700"
+            >
+              Contraseña
+            </label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-border bg-slate-50 px-4 py-3 text-sm text-foreground outline-none transition focus:border-accent focus:bg-white focus:ring-2 focus:ring-accent/20"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+
+          {error ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700"
+            >
+              {error}
+            </p>
+          ) : null}
+
+          <button
+            type="submit"
+            className="w-full rounded-xl bg-accent px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-accent/25 transition hover:bg-accent-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            Entrar al panel
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+          >
+            Volver al inicio
+          </button>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function DashboardView({ onOpenWarehouse }: { onOpenWarehouse: () => void }) {
+  return (
+    <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      <div className="mb-8 sm:mb-10">
+        <p className="text-sm font-semibold uppercase tracking-wide text-accent">
+          Centro de mandos
+        </p>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Panel principal
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted sm:text-base">
+          Selecciona un área para continuar. Por ahora, Almacén está listo para
+          operar.
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {areaBlocks.map((area) => {
+          const Icon = area.icon;
+          const isActive = area.active;
+
+          return (
+            <button
+              key={area.id}
+              type="button"
+              disabled={!isActive}
+              onClick={isActive ? onOpenWarehouse : undefined}
+              className={`group rounded-2xl border p-5 text-left shadow-sm transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                isActive
+                  ? "border-accent/20 bg-gradient-to-br from-accent to-accent-dark text-white shadow-lg shadow-accent/25 hover:-translate-y-1 hover:shadow-xl"
+                  : "cursor-not-allowed border-border/80 bg-surface text-slate-500 opacity-80"
+              }`}
+            >
+              <div
+                className={`mb-4 flex h-12 w-12 items-center justify-center rounded-xl ${area.iconBg} transition group-hover:scale-105`}
+              >
+                <Icon
+                  className={`h-6 w-6 ${isActive ? "text-white" : "text-slate-500"}`}
+                  aria-hidden
+                />
+              </div>
+              <h2 className="text-base font-bold tracking-wide">{area.title}</h2>
+              <p
+                className={`mt-2 text-sm leading-relaxed ${
+                  isActive ? "text-blue-100" : "text-slate-500"
+                }`}
+              >
+                {area.description}
+              </p>
+              {isActive ? (
+                <span className="mt-4 inline-flex text-xs font-semibold uppercase tracking-wide text-blue-100">
+                  Abrir módulo →
+                </span>
+              ) : (
+                <span className="mt-4 inline-flex rounded-full bg-slate-200/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Próximamente
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function WarehouseView() {
+  const [tab, setTab] = useState<WarehouseTab>("herramientas");
+
+  return (
+    <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      <div className="mb-6 sm:mb-8">
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-accent">
+          <Boxes className="h-3.5 w-3.5" aria-hidden />
+          Módulo activo
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Almacén
+        </h1>
+        <p className="mt-2 text-sm text-muted sm:text-base">
+          Espacios preparados para el ingreso de herramientas y consumibles.
+        </p>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border/80 bg-surface shadow-lg shadow-slate-200/60">
+        <div
+          role="tablist"
+          aria-label="Secciones de almacén"
+          className="flex border-b border-border bg-slate-50/80"
+        >
+          {(
+            [
+              { id: "herramientas", label: "Herramientas", icon: Wrench },
+              { id: "consumibles", label: "Consumibles", icon: Package },
+            ] as const
+          ).map((item) => {
+            const selected = tab === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setTab(item.id)}
+                className={`relative flex flex-1 items-center justify-center gap-2 px-3 py-3.5 text-sm font-semibold transition sm:px-6 ${
+                  selected
+                    ? "bg-surface text-accent"
+                    : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
+                }`}
+              >
+                <Icon className="h-4 w-4" aria-hidden />
+                <span className="truncate">{item.label}</span>
+                {selected ? (
+                  <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div role="tabpanel" className="p-5 sm:p-8">
+          {tab === "herramientas" ? (
+            <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/[0.03] p-6 sm:p-10">
+              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+                  <Wrench className="h-7 w-7" aria-hidden />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">
+                  Herramientas
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Aquí se desarrollarán los formularios de ingreso, catálogo y
+                  control de herramientas del taller.
+                </p>
+                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
+                  Espacio reservado — formularios próximamente
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 p-6 sm:p-10">
+              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-200/80 text-slate-600">
+                  <Package className="h-7 w-7" aria-hidden />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">
+                  Consumibles
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Espacio independiente para el registro y seguimiento de
+                  consumibles del almacén.
+                </p>
+                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
+                  Espacio reservado — formularios próximamente
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default function Home() {
+  const [view, setView] = useState<View>("landing");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  function goLogin() {
+    setView("login");
+  }
+
+  function handleLoginSuccess() {
+    setIsAuthenticated(true);
+    setView("dashboard");
+  }
+
+  function handleLogout() {
+    setIsAuthenticated(false);
+    setView("landing");
+  }
+
+  function handleBack() {
+    if (view === "warehouse") {
+      setView("dashboard");
+      return;
+    }
+    if (view === "login") {
+      setView("landing");
+    }
+  }
+
+  const showBack = view === "warehouse" || view === "login";
+  const backLabel = view === "warehouse" ? "Panel" : "Inicio";
+
+  return (
+    <AppShell
+      isAuthenticated={isAuthenticated}
+      onLogin={goLogin}
+      onLogout={handleLogout}
+      showBack={showBack}
+      onBack={handleBack}
+      backLabel={backLabel}
+    >
+      {view === "landing" && <LandingView onLogin={goLogin} />}
+      {view === "login" && (
+        <LoginView onSuccess={handleLoginSuccess} onCancel={() => setView("landing")} />
+      )}
+      {view === "dashboard" && isAuthenticated && (
+        <DashboardView onOpenWarehouse={() => setView("warehouse")} />
+      )}
+      {view === "warehouse" && isAuthenticated && <WarehouseView />}
+    </AppShell>
   );
 }

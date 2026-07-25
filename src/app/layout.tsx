@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nexomotor | Gestión Automotriz",
+  title: "Nexo Motor | Mantenimiento automotriz",
   description:
-    "Plataforma profesional para la gestión integral de talleres y concesionarios automotrices.",
+    "Mantenimiento preventivo y correctivo de autos ligeros. Gestión de taller y almacén.",
 };
 
 export default function RootLayout({
