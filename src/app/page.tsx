@@ -3,9 +3,11 @@
 import { FormEvent, type ReactNode, useState } from "react";
 import {
   ArrowLeft,
+  BookOpen,
   Boxes,
   Car,
   ClipboardList,
+  FolderCog,
   LogOut,
   Package,
   Settings,
@@ -14,8 +16,10 @@ import {
   Wrench,
 } from "lucide-react";
 
-type View = "landing" | "login" | "dashboard" | "warehouse";
+type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
+type AdminTab = "planilla" | "herramientas";
+type ActiveAreaId = "almacen" | "administracion";
 
 const MOCK_USER = "Admin";
 const MOCK_PASSWORD = "NexoMotor";
@@ -27,8 +31,23 @@ const areaBlocks = [
     description: "Herramientas, consumibles e inventario del taller.",
     icon: Boxes,
     active: true,
-    accent: "bg-accent text-white",
     iconBg: "bg-white/20",
+    cardClass:
+      "border-accent/20 bg-gradient-to-br from-accent to-accent-dark text-white shadow-lg shadow-accent/25 hover:-translate-y-1 hover:shadow-xl",
+    descriptionClass: "text-blue-100",
+    ctaClass: "text-blue-100",
+  },
+  {
+    id: "administracion",
+    title: "ADMINISTRACIÓN",
+    description: "Registros de apoyo, planillas y catálogos internos.",
+    icon: FolderCog,
+    active: true,
+    iconBg: "bg-white/20",
+    cardClass:
+      "border-emerald-500/20 bg-gradient-to-br from-emerald-600 to-emerald-800 text-white shadow-lg shadow-emerald-600/25 hover:-translate-y-1 hover:shadow-xl",
+    descriptionClass: "text-emerald-100",
+    ctaClass: "text-emerald-100",
   },
   {
     id: "operaciones",
@@ -36,8 +55,10 @@ const areaBlocks = [
     description: "Órdenes de trabajo y seguimiento de servicios.",
     icon: ClipboardList,
     active: false,
-    accent: "bg-slate-100 text-slate-500",
     iconBg: "bg-slate-200/70",
+    cardClass: "",
+    descriptionClass: "text-slate-500",
+    ctaClass: "",
   },
   {
     id: "clientes",
@@ -45,8 +66,10 @@ const areaBlocks = [
     description: "Base de clientes y historial de vehículos.",
     icon: Users,
     active: false,
-    accent: "bg-slate-100 text-slate-500",
     iconBg: "bg-slate-200/70",
+    cardClass: "",
+    descriptionClass: "text-slate-500",
+    ctaClass: "",
   },
   {
     id: "configuracion",
@@ -54,8 +77,10 @@ const areaBlocks = [
     description: "Preferencias del sistema y accesos.",
     icon: Settings,
     active: false,
-    accent: "bg-slate-100 text-slate-500",
     iconBg: "bg-slate-200/70",
+    cardClass: "",
+    descriptionClass: "text-slate-500",
+    ctaClass: "",
   },
 ] as const;
 
@@ -366,7 +391,11 @@ function LoginView({
   );
 }
 
-function DashboardView({ onOpenWarehouse }: { onOpenWarehouse: () => void }) {
+function DashboardView({
+  onOpenArea,
+}: {
+  onOpenArea: (areaId: ActiveAreaId) => void;
+}) {
   return (
     <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="mb-8 sm:mb-10">
@@ -377,12 +406,12 @@ function DashboardView({ onOpenWarehouse }: { onOpenWarehouse: () => void }) {
           Panel principal
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted sm:text-base">
-          Selecciona un área para continuar. Por ahora, Almacén está listo para
-          operar.
+          Selecciona un área para continuar. Almacén y Administración están
+          listos para operar.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {areaBlocks.map((area) => {
           const Icon = area.icon;
           const isActive = area.active;
@@ -392,10 +421,14 @@ function DashboardView({ onOpenWarehouse }: { onOpenWarehouse: () => void }) {
               key={area.id}
               type="button"
               disabled={!isActive}
-              onClick={isActive ? onOpenWarehouse : undefined}
+              onClick={
+                isActive
+                  ? () => onOpenArea(area.id as ActiveAreaId)
+                  : undefined
+              }
               className={`group rounded-2xl border p-5 text-left shadow-sm transition duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                 isActive
-                  ? "border-accent/20 bg-gradient-to-br from-accent to-accent-dark text-white shadow-lg shadow-accent/25 hover:-translate-y-1 hover:shadow-xl"
+                  ? area.cardClass
                   : "cursor-not-allowed border-border/80 bg-surface text-slate-500 opacity-80"
               }`}
             >
@@ -409,14 +442,14 @@ function DashboardView({ onOpenWarehouse }: { onOpenWarehouse: () => void }) {
               </div>
               <h2 className="text-base font-bold tracking-wide">{area.title}</h2>
               <p
-                className={`mt-2 text-sm leading-relaxed ${
-                  isActive ? "text-blue-100" : "text-slate-500"
-                }`}
+                className={`mt-2 text-sm leading-relaxed ${area.descriptionClass}`}
               >
                 {area.description}
               </p>
               {isActive ? (
-                <span className="mt-4 inline-flex text-xs font-semibold uppercase tracking-wide text-blue-100">
+                <span
+                  className={`mt-4 inline-flex text-xs font-semibold uppercase tracking-wide ${area.ctaClass}`}
+                >
                   Abrir módulo →
                 </span>
               ) : (
@@ -531,6 +564,120 @@ function WarehouseView() {
   );
 }
 
+function AdministracionView({ onBack }: { onBack: () => void }) {
+  const [tab, setTab] = useState<AdminTab>("planilla");
+
+  return (
+    <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      <div className="mb-6 sm:mb-8">
+        <nav
+          aria-label="Breadcrumb"
+          className="mb-3 flex flex-wrap items-center gap-1.5 text-sm text-muted"
+        >
+          <button
+            type="button"
+            onClick={onBack}
+            className="font-medium text-slate-600 transition hover:text-emerald-700"
+          >
+            Dashboard
+          </button>
+          <span aria-hidden className="text-slate-400">
+            /
+          </span>
+          <span className="font-semibold text-emerald-700">Administración</span>
+        </nav>
+
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-emerald-600/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">
+          <FolderCog className="h-3.5 w-3.5" aria-hidden />
+          Módulo activo
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Administración
+        </h1>
+        <p className="mt-2 text-sm text-muted sm:text-base">
+          Registros de apoyo, planillas y catálogos internos del taller.
+        </p>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border/80 bg-surface shadow-lg shadow-slate-200/60">
+        <div
+          role="tablist"
+          aria-label="Secciones de administración"
+          className="flex border-b border-border bg-slate-50/80"
+        >
+          {(
+            [
+              { id: "planilla", label: "PLANILLA", icon: BookOpen },
+              { id: "herramientas", label: "HERRAMIENTAS", icon: Wrench },
+            ] as const
+          ).map((item) => {
+            const selected = tab === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setTab(item.id)}
+                className={`relative flex flex-1 items-center justify-center gap-2 px-3 py-3.5 text-sm font-semibold transition sm:px-6 ${
+                  selected
+                    ? "bg-surface text-emerald-700"
+                    : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
+                }`}
+              >
+                <Icon className="h-4 w-4" aria-hidden />
+                <span className="truncate">{item.label}</span>
+                {selected ? (
+                  <span className="absolute inset-x-0 bottom-0 h-0.5 bg-emerald-600" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div role="tabpanel" className="p-5 sm:p-8">
+          {tab === "planilla" ? (
+            <div className="rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-50/40 p-6 sm:p-10">
+              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600/10 text-emerald-700">
+                  <BookOpen className="h-7 w-7" aria-hidden />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">Planilla</h2>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Próximamente se desarrollarán los formularios de esta
+                  sección.
+                </p>
+                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
+                  Espacio reservado — formularios próximamente
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-50/40 p-6 sm:p-10">
+              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600/10 text-emerald-700">
+                  <Wrench className="h-7 w-7" aria-hidden />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">
+                  Herramientas
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Próximamente se desarrollarán los formularios de esta
+                  sección.
+                </p>
+                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
+                  Espacio reservado — catálogo interno próximamente
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("landing");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -549,8 +696,16 @@ export default function Home() {
     setView("landing");
   }
 
+  function handleOpenArea(areaId: ActiveAreaId) {
+    if (areaId === "almacen") {
+      setView("warehouse");
+      return;
+    }
+    setView("administracion");
+  }
+
   function handleBack() {
-    if (view === "warehouse") {
+    if (view === "warehouse" || view === "administracion") {
       setView("dashboard");
       return;
     }
@@ -559,8 +714,10 @@ export default function Home() {
     }
   }
 
-  const showBack = view === "warehouse" || view === "login";
-  const backLabel = view === "warehouse" ? "Panel" : "Inicio";
+  const showBack =
+    view === "warehouse" || view === "administracion" || view === "login";
+  const backLabel =
+    view === "warehouse" || view === "administracion" ? "Panel" : "Inicio";
 
   return (
     <AppShell
@@ -576,9 +733,12 @@ export default function Home() {
         <LoginView onSuccess={handleLoginSuccess} onCancel={() => setView("landing")} />
       )}
       {view === "dashboard" && isAuthenticated && (
-        <DashboardView onOpenWarehouse={() => setView("warehouse")} />
+        <DashboardView onOpenArea={handleOpenArea} />
       )}
       {view === "warehouse" && isAuthenticated && <WarehouseView />}
+      {view === "administracion" && isAuthenticated && (
+        <AdministracionView onBack={() => setView("dashboard")} />
+      )}
     </AppShell>
   );
 }
