@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, type ReactNode, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useState } from "react";
 import {
   ArrowLeft,
   BookOpen,
@@ -15,11 +15,68 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
+import HerramientasDashboard from "@/components/HerramientasDashboard";
 
 type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
 type AdminTab = "planilla" | "herramientas";
 type ActiveAreaId = "almacen" | "administracion";
+
+const SESSION_KEY = "nexo_session";
+const VIEW_KEY = "nexo_view";
+
+const PERSISTABLE_VIEWS: View[] = [
+  "dashboard",
+  "warehouse",
+  "administracion",
+];
+
+type NexoSession = {
+  user: string;
+  loggedIn: boolean;
+  timestamp: number;
+};
+
+function isPersistableView(value: string | null): value is View {
+  return value !== null && PERSISTABLE_VIEWS.includes(value as View);
+}
+
+function readSession(): NexoSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as NexoSession;
+    if (parsed && parsed.loggedIn === true) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSession() {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(
+    SESSION_KEY,
+    JSON.stringify({
+      user: "Admin",
+      loggedIn: true,
+      timestamp: Date.now(),
+    } satisfies NexoSession)
+  );
+}
+
+function writeView(currentView: View) {
+  if (typeof window === "undefined") return;
+  if (!isPersistableView(currentView)) return;
+  localStorage.setItem(VIEW_KEY, currentView);
+}
+
+function clearSessionStorage() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(VIEW_KEY);
+}
 
 const MOCK_USER = "Admin";
 const MOCK_PASSWORD = "NexoMotor";
@@ -654,23 +711,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-50/40 p-6 sm:p-10">
-              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600/10 text-emerald-700">
-                  <Wrench className="h-7 w-7" aria-hidden />
-                </div>
-                <h2 className="text-lg font-bold text-foreground">
-                  Herramientas
-                </h2>
-                <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Próximamente se desarrollarán los formularios de esta
-                  sección.
-                </p>
-                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
-                  Espacio reservado — catálogo interno próximamente
-                </div>
-              </div>
-            </div>
+            <HerramientasDashboard />
           )}
         </div>
       </div>
@@ -681,19 +722,39 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
 export default function Home() {
   const [view, setView] = useState<View>("landing");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
+
+  useEffect(() => {
+    const session = readSession();
+    if (session?.loggedIn) {
+      setIsAuthenticated(true);
+      const savedView =
+        typeof window !== "undefined" ? localStorage.getItem(VIEW_KEY) : null;
+      setView(isPersistableView(savedView) ? savedView : "dashboard");
+    }
+    setSessionReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionReady || !isAuthenticated) return;
+    writeView(view);
+  }, [view, isAuthenticated, sessionReady]);
 
   function goLogin() {
     setView("login");
   }
 
   function handleLoginSuccess() {
+    writeSession();
     setIsAuthenticated(true);
     setView("dashboard");
+    writeView("dashboard");
   }
 
   function handleLogout() {
+    clearSessionStorage();
     setIsAuthenticated(false);
-    setView("landing");
+    setView("login");
   }
 
   function handleOpenArea(areaId: ActiveAreaId) {
@@ -719,6 +780,14 @@ export default function Home() {
   const backLabel =
     view === "warehouse" || view === "administracion" ? "Panel" : "Inicio";
 
+  if (!sessionReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted">
+        Cargando…
+      </div>
+    );
+  }
+
   return (
     <AppShell
       isAuthenticated={isAuthenticated}
@@ -730,7 +799,10 @@ export default function Home() {
     >
       {view === "landing" && <LandingView onLogin={goLogin} />}
       {view === "login" && (
-        <LoginView onSuccess={handleLoginSuccess} onCancel={() => setView("landing")} />
+        <LoginView
+          onSuccess={handleLoginSuccess}
+          onCancel={() => setView("landing")}
+        />
       )}
       {view === "dashboard" && isAuthenticated && (
         <DashboardView onOpenArea={handleOpenArea} />
