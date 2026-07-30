@@ -18,10 +18,11 @@ import {
 import HerramientasDashboard from "@/components/HerramientasDashboard";
 import PlanillaDashboard from "@/components/PlanillaDashboard";
 import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDashboard";
+import ConsumiblesAdminDashboard from "@/components/ConsumiblesAdminDashboard";
 
 type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
-type AdminTab = "planilla" | "herramientas";
+type AdminTab = "planilla" | "herramientas" | "consumibles";
 type ActiveAreaId = "almacen" | "administracion";
 
 const SESSION_KEY = "nexo_session";
@@ -652,6 +653,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
             [
               { id: "planilla", label: "PLANILLA", icon: BookOpen },
               { id: "herramientas", label: "HERRAMIENTAS", icon: Wrench },
+              { id: "consumibles", label: "CONSUMIBLES", icon: Package },
             ] as const
           ).map((item) => {
             const selected = tab === item.id;
@@ -682,8 +684,10 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
         <div role="tabpanel" className="p-5 sm:p-8">
           {tab === "planilla" ? (
             <PlanillaDashboard />
-          ) : (
+          ) : tab === "herramientas" ? (
             <HerramientasDashboard />
+          ) : (
+            <ConsumiblesAdminDashboard />
           )}
         </div>
       </div>
