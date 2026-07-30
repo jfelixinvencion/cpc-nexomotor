@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import HerramientasDashboard from "@/components/HerramientasDashboard";
 import PlanillaDashboard from "@/components/PlanillaDashboard";
+import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDashboard";
 
 type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
@@ -527,7 +528,7 @@ function WarehouseView() {
   const [tab, setTab] = useState<WarehouseTab>("herramientas");
 
   return (
-    <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+    <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="mb-6 sm:mb-8">
         <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-accent">
           <Boxes className="h-3.5 w-3.5" aria-hidden />
@@ -537,7 +538,7 @@ function WarehouseView() {
           Almacén
         </h1>
         <p className="mt-2 text-sm text-muted sm:text-base">
-          Espacios preparados para el ingreso de herramientas y consumibles.
+          Control de herramientas, préstamos y consumibles del taller.
         </p>
       </div>
 
@@ -580,23 +581,7 @@ function WarehouseView() {
 
         <div role="tabpanel" className="p-5 sm:p-8">
           {tab === "herramientas" ? (
-            <div className="rounded-2xl border border-dashed border-accent/30 bg-accent/[0.03] p-6 sm:p-10">
-              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                  <Wrench className="h-7 w-7" aria-hidden />
-                </div>
-                <h2 className="text-lg font-bold text-foreground">
-                  Herramientas
-                </h2>
-                <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Aquí se desarrollarán los formularios de ingreso, catálogo y
-                  control de herramientas del taller.
-                </p>
-                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
-                  Espacio reservado — formularios próximamente
-                </div>
-              </div>
-            </div>
+            <PrestamosHerramientasDashboard />
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 p-6 sm:p-10">
               <div className="mx-auto flex max-w-lg flex-col items-center text-center">
