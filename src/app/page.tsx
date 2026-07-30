@@ -16,6 +16,7 @@ import {
   Wrench,
 } from "lucide-react";
 import HerramientasDashboard from "@/components/HerramientasDashboard";
+import PlanillaDashboard from "@/components/PlanillaDashboard";
 
 type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
@@ -625,7 +626,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
   const [tab, setTab] = useState<AdminTab>("planilla");
 
   return (
-    <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+    <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="mb-6 sm:mb-8">
         <nav
           aria-label="Breadcrumb"
@@ -695,21 +696,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
 
         <div role="tabpanel" className="p-5 sm:p-8">
           {tab === "planilla" ? (
-            <div className="rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-50/40 p-6 sm:p-10">
-              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600/10 text-emerald-700">
-                  <BookOpen className="h-7 w-7" aria-hidden />
-                </div>
-                <h2 className="text-lg font-bold text-foreground">Planilla</h2>
-                <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Próximamente se desarrollarán los formularios de esta
-                  sección.
-                </p>
-                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
-                  Espacio reservado — formularios próximamente
-                </div>
-              </div>
-            </div>
+            <PlanillaDashboard />
           ) : (
             <HerramientasDashboard />
           )}
