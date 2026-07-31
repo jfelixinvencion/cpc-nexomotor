@@ -185,7 +185,11 @@ export default function PrestamosHerramientasDashboard() {
     setLoading(true);
     setError(null);
 
-    const [dispRes, pendRes, histRes, planRes] = await Promise.all([
+    const since30d = new Date();
+    since30d.setDate(since30d.getDate() - 30);
+    const sinceIso = since30d.toISOString();
+
+    const [dispRes, pendRes, histRes, planRes, rotacionRes] = await Promise.all([
       supabase
         .from("herramientas")
         .select("id, codigo, descripcion, cantidad, ubicacion, responsable")
@@ -208,10 +212,21 @@ export default function PrestamosHerramientasDashboard() {
         .select("id, nombres, apellido_paterno, apellido_materno, estado")
         .eq("estado", "Activo")
         .order("nombres", { ascending: true }),
+      // Conteo liviano de retiros (últimos 30 días) para ordenar Disponibles.
+      supabase
+        .from("historial_movimientos_herramientas")
+        .select("herramienta_id")
+        .eq("tipo_movimiento", "RETIRO")
+        .gte("fecha_hora", sinceIso)
+        .not("herramienta_id", "is", null),
     ]);
 
     const firstError =
-      dispRes.error || pendRes.error || histRes.error || planRes.error;
+      dispRes.error ||
+      pendRes.error ||
+      histRes.error ||
+      planRes.error ||
+      rotacionRes.error;
     if (firstError) {
       const message = formatSupabaseError(
         firstError,
@@ -223,11 +238,26 @@ export default function PrestamosHerramientasDashboard() {
       return;
     }
 
+    const retirosPorHerramienta = new Map<number, number>();
+    for (const row of (rotacionRes.data as Record<string, unknown>[]) ?? []) {
+      const id = Number(row.herramienta_id);
+      if (!Number.isFinite(id)) continue;
+      retirosPorHerramienta.set(id, (retirosPorHerramienta.get(id) ?? 0) + 1);
+    }
+
     const disponiblesMapped = ((dispRes.data as Record<string, unknown>[]) ?? [])
       .map(mapHerramienta)
       .filter(
         (item) => item.cantidad > 0 && isUbicacionAlmacen(item.ubicacion)
-      );
+      )
+      .sort((a, b) => {
+        const countA = retirosPorHerramienta.get(a.id) ?? 0;
+        const countB = retirosPorHerramienta.get(b.id) ?? 0;
+        if (countB !== countA) return countB - countA;
+        return a.descripcion.localeCompare(b.descripcion, "es", {
+          sensitivity: "base",
+        });
+      });
 
     setDisponibles(disponiblesMapped);
 
