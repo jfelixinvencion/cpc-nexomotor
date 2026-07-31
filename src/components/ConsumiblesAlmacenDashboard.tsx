@@ -9,7 +9,10 @@ import {
   useState,
 } from "react";
 import {
+  CheckCircle2,
   Loader2,
+  Lock,
+  Pencil,
   Plus,
   Search,
   Trash2,
@@ -25,6 +28,8 @@ type HistorialConsumible = {
   codigo: string;
   descripcion: string;
   cantidad: number;
+  aprobado: boolean;
+  fecha_aprobacion: string | null;
 };
 
 type PlanillaActivo = {
@@ -54,6 +59,10 @@ const BAHIAS = ["1", "2", "3", "4", "5"] as const;
 function asText(value: unknown) {
   if (value == null) return "";
   return String(value).trim();
+}
+
+function asBool(value: unknown) {
+  return value === true || value === "true" || value === 1 || value === "t";
 }
 
 function fullName(p: PlanillaActivo) {
@@ -125,6 +134,23 @@ function bahiaBadgeClass(bahia: string) {
   return map[bahia] ?? "bg-slate-100 text-slate-700 ring-slate-500/20";
 }
 
+async function fetchAprobadoFlag(id: number) {
+  const { data, error } = await supabase
+    .from("historial_consumibles")
+    .select("id, aprobado")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    return { aprobado: null as boolean | null, error };
+  }
+
+  return {
+    aprobado: data ? asBool((data as { aprobado?: unknown }).aprobado) : null,
+    error: null,
+  };
+}
+
 export default function ConsumiblesAlmacenDashboard() {
   const [historial, setHistorial] = useState<HistorialConsumible[]>([]);
   const [activos, setActivos] = useState<PlanillaActivo[]>([]);
@@ -133,11 +159,23 @@ export default function ConsumiblesAlmacenDashboard() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"create" | "edit">("create");
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [responsable, setResponsable] = useState("");
   const [bahia, setBahia] = useState("");
   const [lineas, setLineas] = useState<LineaSku[]>([createEmptyLine()]);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [pendingDelete, setPendingDelete] = useState<HistorialConsumible | null>(
+    null
+  );
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [pendingVb, setPendingVb] = useState<HistorialConsumible | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [vbError, setVbError] = useState<string | null>(null);
 
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
     {}
@@ -151,7 +189,9 @@ export default function ConsumiblesAlmacenDashboard() {
     const [histRes, planRes] = await Promise.all([
       supabase
         .from("historial_consumibles")
-        .select("id, fecha_hora, responsable, bahia, codigo, descripcion, cantidad")
+        .select(
+          "id, fecha_hora, responsable, bahia, codigo, descripcion, cantidad, aprobado, fecha_aprobacion"
+        )
         .order("fecha_hora", { ascending: false }),
       supabase
         .from("planilla")
@@ -181,6 +221,8 @@ export default function ConsumiblesAlmacenDashboard() {
         codigo: asText(row.codigo),
         descripcion: asText(row.descripcion),
         cantidad: Number(row.cantidad ?? 0),
+        aprobado: asBool(row.aprobado),
+        fecha_aprobacion: asText(row.fecha_aprobacion) || null,
       }))
     );
 
@@ -210,9 +252,10 @@ export default function ConsumiblesAlmacenDashboard() {
     setSelectedId((prev) => (prev === id ? null : id));
   }
 
-  function openModal() {
+  function openCreateModal() {
     const selected = historial.find((h) => h.id === selectedId);
-    // Responsable y Bahía siempre parten vacíos; solo se duplican SKU/cantidad.
+    setModalMode("create");
+    setEditingId(null);
     setResponsable("");
     setBahia("");
     if (selected) {
@@ -234,13 +277,59 @@ export default function ConsumiblesAlmacenDashboard() {
     setModalOpen(true);
   }
 
-  function closeModal() {
-    if (saving) return;
+  async function openEditModal(item: HistorialConsumible) {
+    if (item.aprobado) {
+      setError("Este registro ya está aprobado y no puede editarse.");
+      return;
+    }
+
+    const { aprobado, error: checkError } = await fetchAprobadoFlag(item.id);
+    if (checkError) {
+      setError(
+        formatSupabaseError(checkError, "No se pudo verificar el estado")
+      );
+      return;
+    }
+    if (aprobado === true) {
+      setError("Este registro ya está aprobado y no puede editarse.");
+      await loadData();
+      return;
+    }
+
+    setModalMode("edit");
+    setEditingId(item.id);
+    setResponsable(item.responsable);
+    setBahia(item.bahia);
+    setLineas([
+      {
+        ...createEmptyLine(),
+        query: `[${item.codigo}] - ${item.descripcion}`,
+        selected: {
+          codigo: item.codigo,
+          descripcion: item.descripcion,
+        },
+        cantidad: String(item.cantidad || 1),
+      },
+    ]);
+    setFormError(null);
+    setSelectedId(null);
+    setModalOpen(true);
+  }
+
+  function resetModalState() {
     setModalOpen(false);
     setFormError(null);
     setSelectedId(null);
+    setEditingId(null);
+    setModalMode("create");
     setResponsable("");
     setBahia("");
+    setLineas([createEmptyLine()]);
+  }
+
+  function closeModal() {
+    if (saving) return;
+    resetModalState();
   }
 
   function updateLinea(key: string, patch: Partial<LineaSku>) {
@@ -250,10 +339,12 @@ export default function ConsumiblesAlmacenDashboard() {
   }
 
   function addLinea() {
+    if (modalMode === "edit") return;
     setLineas((prev) => [...prev, createEmptyLine()]);
   }
 
   function removeLinea(key: string) {
+    if (modalMode === "edit") return;
     setLineas((prev) => {
       if (prev.length <= 1) return prev;
       return prev.filter((line) => line.key !== key);
@@ -360,7 +451,11 @@ export default function ConsumiblesAlmacenDashboard() {
         return;
       }
       const cantidad = Number(line.cantidad);
-      if (!Number.isFinite(cantidad) || !Number.isInteger(cantidad) || cantidad < 1) {
+      if (
+        !Number.isFinite(cantidad) ||
+        !Number.isInteger(cantidad) ||
+        cantidad < 1
+      ) {
         setFormError(
           `La cantidad de la línea ${index + 1} debe ser un entero ≥ 1.`
         );
@@ -374,8 +469,56 @@ export default function ConsumiblesAlmacenDashboard() {
     }
 
     setSaving(true);
-    const fechaHora = new Date().toISOString();
 
+    if (modalMode === "edit" && editingId != null) {
+      const { aprobado, error: checkError } = await fetchAprobadoFlag(editingId);
+      if (checkError) {
+        setFormError(
+          formatSupabaseError(checkError, "No se pudo verificar el estado")
+        );
+        setSaving(false);
+        return;
+      }
+      if (aprobado === true) {
+        setFormError("Este registro ya está aprobado y no puede editarse.");
+        setSaving(false);
+        await loadData();
+        return;
+      }
+
+      const line = payloadLines[0];
+      const { error: updateError } = await supabase
+        .from("historial_consumibles")
+        .update({
+          responsable: responsableValue,
+          bahia,
+          codigo: line.codigo,
+          descripcion: line.descripcion,
+          cantidad: line.cantidad,
+        })
+        .eq("id", editingId)
+        .eq("aprobado", false)
+        .select("id")
+        .maybeSingle();
+
+      if (updateError) {
+        const message = formatSupabaseError(
+          updateError,
+          "No se pudo actualizar el registro"
+        );
+        console.error("Error actualizando historial:", message, updateError);
+        setFormError(message);
+        setSaving(false);
+        return;
+      }
+
+      setSaving(false);
+      resetModalState();
+      await loadData();
+      return;
+    }
+
+    const fechaHora = new Date().toISOString();
     const rows = payloadLines.map((line) => ({
       responsable: responsableValue,
       bahia,
@@ -383,6 +526,7 @@ export default function ConsumiblesAlmacenDashboard() {
       descripcion: line.descripcion,
       cantidad: line.cantidad,
       fecha_hora: fechaHora,
+      aprobado: false,
     }));
 
     const { error: insertError } = await supabase
@@ -401,11 +545,127 @@ export default function ConsumiblesAlmacenDashboard() {
     }
 
     setSaving(false);
-    setModalOpen(false);
+    resetModalState();
+    await loadData();
+  }
+
+  function openDeleteConfirm(item: HistorialConsumible) {
+    if (item.aprobado) {
+      setError("Este registro ya está aprobado y no puede eliminarse.");
+      return;
+    }
+    setDeleteError(null);
+    setPendingDelete(item);
+  }
+
+  function closeDeleteModal() {
+    if (deleting) return;
+    setPendingDelete(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
+
+    const { aprobado, error: checkError } = await fetchAprobadoFlag(
+      pendingDelete.id
+    );
+    if (checkError) {
+      setDeleteError(
+        formatSupabaseError(checkError, "No se pudo verificar el estado")
+      );
+      setDeleting(false);
+      return;
+    }
+    if (aprobado === true) {
+      setDeleteError("Este registro ya está aprobado y no puede eliminarse.");
+      setDeleting(false);
+      await loadData();
+      return;
+    }
+
+    const { error: deleteErr } = await supabase
+      .from("historial_consumibles")
+      .delete()
+      .eq("id", pendingDelete.id)
+      .eq("aprobado", false);
+
+    if (deleteErr) {
+      const message = formatSupabaseError(
+        deleteErr,
+        "No se pudo eliminar el registro"
+      );
+      console.error("Error eliminando historial:", message, deleteErr);
+      setDeleteError(message);
+      setDeleting(false);
+      return;
+    }
+
+    setDeleting(false);
+    setPendingDelete(null);
     setSelectedId(null);
-    setResponsable("");
-    setBahia("");
-    setLineas([createEmptyLine()]);
+    await loadData();
+  }
+
+  function openVbConfirm(item: HistorialConsumible) {
+    if (item.aprobado) return;
+    setVbError(null);
+    setPendingVb(item);
+  }
+
+  function closeVbModal() {
+    if (approving) return;
+    setPendingVb(null);
+    setVbError(null);
+  }
+
+  async function confirmVb() {
+    if (!pendingVb) return;
+    setApproving(true);
+    setVbError(null);
+
+    const { aprobado, error: checkError } = await fetchAprobadoFlag(pendingVb.id);
+    if (checkError) {
+      setVbError(
+        formatSupabaseError(checkError, "No se pudo verificar el estado")
+      );
+      setApproving(false);
+      return;
+    }
+    if (aprobado === true) {
+      setVbError("Este registro ya está aprobado.");
+      setApproving(false);
+      await loadData();
+      return;
+    }
+
+    const { error: updateError } = await supabase
+      .from("historial_consumibles")
+      .update({
+        aprobado: true,
+        fecha_aprobacion: new Date().toISOString(),
+      })
+      .eq("id", pendingVb.id)
+      .eq("aprobado", false)
+      .select("id")
+      .maybeSingle();
+
+    if (updateError) {
+      const message = formatSupabaseError(
+        updateError,
+        "No se pudo aprobar el registro"
+      );
+      console.error("Error aprobando historial:", message, updateError);
+      setVbError(message);
+      setApproving(false);
+      return;
+    }
+
+    setApproving(false);
+    setPendingVb(null);
+    setSelectedId(null);
     await loadData();
   }
 
@@ -415,7 +675,7 @@ export default function ConsumiblesAlmacenDashboard() {
         <h2 className="text-lg font-bold text-foreground">Consumibles</h2>
         <button
           type="button"
-          onClick={openModal}
+          onClick={openCreateModal}
           className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-600/20 transition hover:bg-rose-700"
         >
           <Plus className="h-4 w-4" aria-hidden />
@@ -443,12 +703,13 @@ export default function ConsumiblesAlmacenDashboard() {
                 <th className="px-4 py-2.5">Código</th>
                 <th className="px-4 py-2.5">Descripción</th>
                 <th className="px-4 py-2.5 text-right">Cantidad</th>
+                <th className="px-4 py-2.5 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border bg-white">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-muted">
+                  <td colSpan={7} className="px-4 py-8 text-center text-muted">
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin text-rose-600" />
                       Cargando historial…
@@ -457,21 +718,26 @@ export default function ConsumiblesAlmacenDashboard() {
                 </tr>
               ) : historial.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-muted">
+                  <td colSpan={7} className="px-4 py-8 text-center text-muted">
                     Aún no hay salidas registradas.
                   </td>
                 </tr>
               ) : (
                 historial.map((item) => {
                   const selected = selectedId === item.id;
+                  const locked = item.aprobado;
                   return (
                     <tr
                       key={item.id}
-                      onClick={() => toggleSelectRow(item.id)}
-                      className={`cursor-pointer transition ${
-                        selected
-                          ? "bg-rose-100/80 ring-1 ring-inset ring-rose-300"
-                          : "hover:bg-rose-50/60"
+                      onClick={() => {
+                        if (!locked) toggleSelectRow(item.id);
+                      }}
+                      className={`transition ${
+                        locked
+                          ? "bg-emerald-50/40"
+                          : selected
+                            ? "cursor-pointer bg-rose-100/80 ring-1 ring-inset ring-rose-300"
+                            : "cursor-pointer hover:bg-rose-50/60"
                       }`}
                     >
                       <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
@@ -495,6 +761,54 @@ export default function ConsumiblesAlmacenDashboard() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-slate-700">
                         {item.cantidad}
+                      </td>
+                      <td
+                        className="whitespace-nowrap px-4 py-2.5 text-right"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {locked ? (
+                          <span
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-800"
+                            title={
+                              item.fecha_aprobacion
+                                ? `Aprobado ${formatDateTime(item.fecha_aprobacion)}`
+                                : "Aprobado"
+                            }
+                          >
+                            <Lock className="h-3.5 w-3.5" aria-hidden />
+                            VB
+                          </span>
+                        ) : (
+                          <div className="inline-flex items-center justify-end gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => void openEditModal(item)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-100 hover:text-rose-700"
+                              aria-label={`Editar ${item.codigo}`}
+                              title="Editar"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openDeleteConfirm(item)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                              aria-label={`Eliminar ${item.codigo}`}
+                              title="Eliminar"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openVbConfirm(item)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-700"
+                              aria-label={`Visto bueno ${item.codigo}`}
+                              title="Visto Bueno"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -521,7 +835,9 @@ export default function ConsumiblesAlmacenDashboard() {
                 id={modalTitleId}
                 className="text-base font-bold text-foreground"
               >
-                Registrar salida de consumibles
+                {modalMode === "edit"
+                  ? "Editar salida de consumibles"
+                  : "Registrar salida de consumibles"}
               </h3>
               <button
                 type="button"
@@ -586,14 +902,16 @@ export default function ConsumiblesAlmacenDashboard() {
                   <h4 className="text-sm font-semibold text-foreground">
                     Consumibles solicitados
                   </h4>
-                  <button
-                    type="button"
-                    onClick={addLinea}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden />
-                    Agregar otro SKU
-                  </button>
+                  {modalMode === "create" ? (
+                    <button
+                      type="button"
+                      onClick={addLinea}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden />
+                      Agregar otro SKU
+                    </button>
+                  ) : null}
                 </div>
 
                 <div className="space-y-3">
@@ -606,16 +924,18 @@ export default function ConsumiblesAlmacenDashboard() {
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                           Línea {index + 1}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => removeLinea(line.key)}
-                          disabled={lineas.length <= 1}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                          aria-label={`Eliminar línea ${index + 1}`}
-                          title="Eliminar línea"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {modalMode === "create" ? (
+                          <button
+                            type="button"
+                            onClick={() => removeLinea(line.key)}
+                            disabled={lineas.length <= 1}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                            aria-label={`Eliminar línea ${index + 1}`}
+                            title="Eliminar línea"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : null}
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-[1fr_110px]">
@@ -736,9 +1056,7 @@ export default function ConsumiblesAlmacenDashboard() {
                 </button>
                 <button
                   type="submit"
-                  disabled={
-                    saving || !responsable.trim() || !bahia.trim()
-                  }
+                  disabled={saving || !responsable.trim() || !bahia.trim()}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-600/20 transition hover:bg-rose-700 disabled:opacity-50"
                 >
                   {saving ? (
@@ -746,12 +1064,160 @@ export default function ConsumiblesAlmacenDashboard() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Guardando…
                     </>
+                  ) : modalMode === "edit" ? (
+                    "Guardar cambios"
                   ) : (
                     "Guardar salida"
                   )}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingDelete ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeDeleteModal();
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border bg-red-50/70 px-5 py-4">
+              <h3 className="text-base font-bold text-foreground">
+                Confirmar eliminación
+              </h3>
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={deleting}
+                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white disabled:opacity-50"
+                aria-label="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-slate-600">
+                ¿Eliminar{" "}
+                <span className="font-mono font-semibold text-rose-800">
+                  {pendingDelete.codigo}
+                </span>{" "}
+                — {pendingDelete.descripcion}?
+              </p>
+              {deleteError ? (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                >
+                  {deleteError}
+                </p>
+              ) : null}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeDeleteModal}
+                  disabled={deleting}
+                  className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmDelete()}
+                  disabled={deleting}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deleting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Eliminando…
+                    </>
+                  ) : (
+                    "Sí, eliminar"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingVb ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeVbModal();
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border bg-emerald-50/70 px-5 py-4">
+              <h3 className="text-base font-bold text-foreground">
+                Confirmar Visto Bueno
+              </h3>
+              <button
+                type="button"
+                onClick={closeVbModal}
+                disabled={approving}
+                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white disabled:opacity-50"
+                aria-label="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-slate-600">
+                ¿Confirmar Visto Bueno? Una vez aprobado, el registro no podrá
+                ser editado ni eliminado.
+              </p>
+              <p className="text-sm text-slate-500">
+                <span className="font-mono font-semibold text-rose-800">
+                  {pendingVb.codigo}
+                </span>{" "}
+                — {pendingVb.descripcion}
+              </p>
+              {vbError ? (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                >
+                  {vbError}
+                </p>
+              ) : null}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeVbModal}
+                  disabled={approving}
+                  className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmVb()}
+                  disabled={approving}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {approving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Aprobando…
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Confirmar VB
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
