@@ -589,11 +589,11 @@ export default function PrestamosHerramientasDashboard() {
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-bold text-foreground">Herramientas</h2>
-          <p className="mt-1 text-sm text-muted">
+          <h2 className="text-base font-bold text-foreground">Herramientas</h2>
+          <p className="text-xs text-muted">
             Control de retiros, devoluciones y movimientos del almacén.
           </p>
         </div>
@@ -602,7 +602,7 @@ export default function PrestamosHerramientasDashboard() {
       <div
         role="tablist"
         aria-label="Subsecciones de herramientas"
-        className="flex flex-wrap gap-2 rounded-xl border border-border bg-slate-50/80 p-1.5"
+        className="flex flex-wrap gap-1.5 rounded-lg border border-border bg-slate-50/80 p-1"
       >
         {subTabs.map((item) => {
           const selected = subTab === item.id;

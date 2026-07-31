@@ -530,21 +530,21 @@ function WarehouseView() {
   const [tab, setTab] = useState<WarehouseTab>("herramientas");
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-12">
-      <div className="mb-6 sm:mb-8">
-        <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-accent">
-          <Boxes className="h-3.5 w-3.5" aria-hidden />
-          Módulo activo
-        </div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+    <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h1 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
           Almacén
         </h1>
-        <p className="mt-2 text-sm text-muted sm:text-base">
+        <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+          <Boxes className="h-3 w-3" aria-hidden />
+          Módulo activo
+        </span>
+        <p className="hidden text-xs text-muted sm:inline">
           Control de herramientas, préstamos y consumibles del taller.
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-border/80 bg-surface shadow-lg shadow-slate-200/60">
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-surface shadow-md shadow-slate-200/50">
         <div
           role="tablist"
           aria-label="Secciones de almacén"
@@ -565,7 +565,7 @@ function WarehouseView() {
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setTab(item.id)}
-                className={`relative flex flex-1 items-center justify-center gap-2 px-3 py-3.5 text-sm font-semibold transition sm:px-6 ${
+                className={`relative flex flex-1 items-center justify-center gap-2 px-3 py-2 text-sm font-semibold transition sm:px-5 ${
                   selected
                     ? "bg-surface text-accent"
                     : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
@@ -581,7 +581,7 @@ function WarehouseView() {
           })}
         </div>
 
-        <div role="tabpanel" className="p-5 sm:p-8">
+        <div role="tabpanel" className="p-2 sm:p-3">
           {tab === "herramientas" ? (
             <PrestamosHerramientasDashboard />
           ) : (

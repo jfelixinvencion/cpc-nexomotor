@@ -670,13 +670,13 @@ export default function ConsumiblesAlmacenDashboard() {
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-lg font-bold text-foreground">Consumibles</h2>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base font-bold text-foreground">Consumibles</h2>
         <button
           type="button"
           onClick={openCreateModal}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-600/20 transition hover:bg-rose-700"
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm shadow-rose-600/20 transition hover:bg-rose-700"
         >
           <Plus className="h-4 w-4" aria-hidden />
           Agregar salida
@@ -686,30 +686,30 @@ export default function ConsumiblesAlmacenDashboard() {
       {error ? (
         <div
           role="alert"
-          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
           {error}
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-rose-200/70">
-        <div className="overflow-x-auto">
+      <div className="overflow-hidden rounded-lg border border-rose-200/70">
+        <div className="max-h-[calc(100vh-220px)] overflow-auto">
           <table className="min-w-full divide-y divide-border text-left text-sm">
-            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <thead className="sticky top-0 z-[1] bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-2.5">Fecha/Hora</th>
-                <th className="px-4 py-2.5">Responsable</th>
-                <th className="px-4 py-2.5">Bahía</th>
-                <th className="px-4 py-2.5">Código</th>
-                <th className="px-4 py-2.5">Descripción</th>
-                <th className="px-4 py-2.5 text-right">Cantidad</th>
-                <th className="px-4 py-2.5 text-right">Acciones</th>
+                <th className="px-3 py-2">Fecha/Hora</th>
+                <th className="px-3 py-2">Responsable</th>
+                <th className="px-3 py-2">Bahía</th>
+                <th className="px-3 py-2">Código</th>
+                <th className="px-3 py-2">Descripción</th>
+                <th className="px-3 py-2 text-right">Cantidad</th>
+                <th className="px-3 py-2 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border bg-white">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-muted">
+                  <td colSpan={7} className="px-3 py-6 text-center text-muted">
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin text-rose-600" />
                       Cargando historial…
@@ -718,7 +718,7 @@ export default function ConsumiblesAlmacenDashboard() {
                 </tr>
               ) : historial.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-muted">
+                  <td colSpan={7} className="px-3 py-6 text-center text-muted">
                     Aún no hay salidas registradas.
                   </td>
                 </tr>
@@ -729,41 +729,39 @@ export default function ConsumiblesAlmacenDashboard() {
                   return (
                     <tr
                       key={item.id}
-                      onClick={() => {
-                        if (!locked) toggleSelectRow(item.id);
-                      }}
-                      className={`transition ${
-                        locked
-                          ? "bg-emerald-50/40"
-                          : selected
-                            ? "cursor-pointer bg-rose-100/80 ring-1 ring-inset ring-rose-300"
-                            : "cursor-pointer hover:bg-rose-50/60"
+                      onClick={() => toggleSelectRow(item.id)}
+                      className={`cursor-pointer transition ${
+                        selected
+                          ? "bg-rose-100/80 ring-1 ring-inset ring-rose-300"
+                          : locked
+                            ? "bg-emerald-50/30 hover:bg-rose-50/50"
+                            : "hover:bg-rose-50/60"
                       }`}
                     >
-                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                      <td className="whitespace-nowrap px-3 py-1.5 text-slate-600">
                         {formatDateTime(item.fecha_hora)}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-700">
+                      <td className="whitespace-nowrap px-3 py-1.5 text-slate-700">
                         {item.responsable || "—"}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5">
+                      <td className="whitespace-nowrap px-3 py-1.5">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${bahiaBadgeClass(item.bahia)}`}
                         >
                           Bahía {item.bahia || "—"}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-semibold text-rose-800">
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs font-semibold text-rose-800">
                         {item.codigo}
                       </td>
-                      <td className="px-4 py-2.5 font-medium text-foreground">
+                      <td className="px-3 py-1.5 font-medium text-foreground">
                         {item.descripcion || "—"}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-slate-700">
+                      <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700">
                         {item.cantidad}
                       </td>
                       <td
-                        className="whitespace-nowrap px-4 py-2.5 text-right"
+                        className="whitespace-nowrap px-3 py-1.5 text-right"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {locked ? (
