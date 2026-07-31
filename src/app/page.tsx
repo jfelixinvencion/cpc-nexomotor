@@ -19,6 +19,7 @@ import HerramientasDashboard from "@/components/HerramientasDashboard";
 import PlanillaDashboard from "@/components/PlanillaDashboard";
 import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDashboard";
 import ConsumiblesAdminDashboard from "@/components/ConsumiblesAdminDashboard";
+import ConsumiblesAlmacenDashboard from "@/components/ConsumiblesAlmacenDashboard";
 
 type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
 type WarehouseTab = "herramientas" | "consumibles";
@@ -584,23 +585,7 @@ function WarehouseView() {
           {tab === "herramientas" ? (
             <PrestamosHerramientasDashboard />
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 p-6 sm:p-10">
-              <div className="mx-auto flex max-w-lg flex-col items-center text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-200/80 text-slate-600">
-                  <Package className="h-7 w-7" aria-hidden />
-                </div>
-                <h2 className="text-lg font-bold text-foreground">
-                  Consumibles
-                </h2>
-                <p className="mt-2 text-sm leading-relaxed text-muted">
-                  Espacio independiente para el registro y seguimiento de
-                  consumibles del almacén.
-                </p>
-                <div className="mt-6 w-full rounded-xl border border-border bg-surface px-4 py-8 text-sm text-slate-500 shadow-sm">
-                  Espacio reservado — formularios próximamente
-                </div>
-              </div>
-            </div>
+            <ConsumiblesAlmacenDashboard />
           )}
         </div>
       </div>
