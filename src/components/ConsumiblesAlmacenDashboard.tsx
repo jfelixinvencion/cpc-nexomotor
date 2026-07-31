@@ -134,7 +134,7 @@ export default function ConsumiblesAlmacenDashboard() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [responsable, setResponsable] = useState("");
-  const [bahia, setBahia] = useState("1");
+  const [bahia, setBahia] = useState("");
   const [lineas, setLineas] = useState<LineaSku[]>([createEmptyLine()]);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -212,9 +212,10 @@ export default function ConsumiblesAlmacenDashboard() {
 
   function openModal() {
     const selected = historial.find((h) => h.id === selectedId);
+    // Responsable y Bahía siempre parten vacíos; solo se duplican SKU/cantidad.
+    setResponsable("");
+    setBahia("");
     if (selected) {
-      setResponsable(selected.responsable);
-      setBahia(selected.bahia || "1");
       setLineas([
         {
           ...createEmptyLine(),
@@ -227,8 +228,6 @@ export default function ConsumiblesAlmacenDashboard() {
         },
       ]);
     } else {
-      setResponsable("");
-      setBahia("1");
       setLineas([createEmptyLine()]);
     }
     setFormError(null);
@@ -239,6 +238,9 @@ export default function ConsumiblesAlmacenDashboard() {
     if (saving) return;
     setModalOpen(false);
     setFormError(null);
+    setSelectedId(null);
+    setResponsable("");
+    setBahia("");
   }
 
   function updateLinea(key: string, patch: Partial<LineaSku>) {
@@ -341,8 +343,8 @@ export default function ConsumiblesAlmacenDashboard() {
       setFormError("Selecciona un responsable.");
       return;
     }
-    if (!BAHIAS.includes(bahia as (typeof BAHIAS)[number])) {
-      setFormError("Selecciona una bahía válida.");
+    if (!bahia.trim() || !BAHIAS.includes(bahia as (typeof BAHIAS)[number])) {
+      setFormError("Selecciona una bahía.");
       return;
     }
 
@@ -402,7 +404,7 @@ export default function ConsumiblesAlmacenDashboard() {
     setModalOpen(false);
     setSelectedId(null);
     setResponsable("");
-    setBahia("1");
+    setBahia("");
     setLineas([createEmptyLine()]);
     await loadData();
   }
@@ -569,6 +571,7 @@ export default function ConsumiblesAlmacenDashboard() {
                     onChange={(e) => setBahia(e.target.value)}
                     className="w-full rounded-xl border border-border px-3 py-2.5 text-sm outline-none transition focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20"
                   >
+                    <option value="">Seleccionar bahía…</option>
                     {BAHIAS.map((b) => (
                       <option key={b} value={b}>
                         Bahía {b}
@@ -733,7 +736,9 @@ export default function ConsumiblesAlmacenDashboard() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={
+                    saving || !responsable.trim() || !bahia.trim()
+                  }
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-rose-600/20 transition hover:bg-rose-700 disabled:opacity-50"
                 >
                   {saving ? (
