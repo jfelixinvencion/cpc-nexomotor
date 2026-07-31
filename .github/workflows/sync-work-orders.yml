@@ -1,0 +1,67 @@
+name: Sincronizar Órdenes de Trabajo Sigma
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Modo de sincronización
+        required: true
+        type: choice
+        options:
+          - recent
+          - full
+        default: recent
+      confirmar:
+        description: Escribe SINCRONIZAR para confirmar la sincronización de OT
+        required: false
+        type: string
+
+jobs:
+  sync-work-orders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirmar sincronización
+        run: |
+          if [ "${{ inputs.confirmar }}" != "SINCRONIZAR" ]; then
+            echo "Debes escribir SINCRONIZAR en el input 'confirmar' para continuar."
+            exit 1
+          fi
+
+      - name: Disparar sincronización de OT
+        env:
+          APP_SYNC_URL: ${{ secrets.APP_SYNC_URL }}
+          SYNC_TRIGGER_SECRET: ${{ secrets.SYNC_TRIGGER_SECRET }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_SYNC_URL:-}" ] || [ -z "${SYNC_TRIGGER_SECRET:-}" ]; then
+            echo "Faltan secretos APP_SYNC_URL o SYNC_TRIGGER_SECRET."
+            exit 1
+          fi
+
+          RESPONSE_FILE="$(mktemp)"
+          HTTP_CODE="$(curl -sS -o "$RESPONSE_FILE" -w "%{http_code}" \
+            -X POST \
+            -H "Accept: application/json" \
+            -H "x-sync-secret: ${SYNC_TRIGGER_SECRET}" \
+            "${APP_SYNC_URL}/api/sync-work-orders?mode=${MODE}")"
+
+          echo "HTTP status: ${HTTP_CODE}"
+          echo "Response body:"
+
+          if command -v jq >/dev/null 2>&1 && jq empty "$RESPONSE_FILE" 2>/dev/null; then
+            jq '{success, mode, requestedMode, maxCreatedAt, pagesFetched, lastPage, stoppedEarly, fetched, upserted, errors, error}' "$RESPONSE_FILE" \
+              || jq '.' "$RESPONSE_FILE"
+          else
+            cat "$RESPONSE_FILE"
+            echo
+          fi
+
+          case "$HTTP_CODE" in
+            2??) exit 0 ;;
+            *)
+              echo "La sincronización de OT falló con HTTP ${HTTP_CODE}."
+              exit 1
+              ;;
+          esac
