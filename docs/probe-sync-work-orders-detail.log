@@ -1,0 +1,8 @@
+=== Probe sync-work-orders-detail 2026-08-01T15:02:02.520Z ===
+MISSING_ENV: SIGMA_OT_ENDPOINT
+URL builder unit check (offline):
+  .../work-order-spare/requests => .../work-order-spare/work-order/{id} OK
+  trailing slash and query strip OK
+Live Sigma list/detail probe skipped: SIGMA_OT_ENDPOINT not present in local .env.local.
+tsc --noEmit: exit 0
+=== Probe done ===
