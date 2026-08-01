@@ -51,7 +51,7 @@ jobs:
           echo "Response body:"
 
           if command -v jq >/dev/null 2>&1 && jq empty "$RESPONSE_FILE" 2>/dev/null; then
-            jq '{success, mode, requestedMode, maxCreatedAt, pagesFetched, lastPage, stoppedEarly, fetched, upserted, errors, error}' "$RESPONSE_FILE" \
+            jq '{success, mode, requestedMode, maxCreatedAt, pagesFetched, lastPage, stoppedEarly, fetched, upserted, truncated, total_listed, total_details_fetched, errors, error}' "$RESPONSE_FILE" \
               || jq '.' "$RESPONSE_FILE"
           else
             cat "$RESPONSE_FILE"
