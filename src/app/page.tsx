@@ -12,6 +12,7 @@ import {
   Package,
   Settings,
   Shield,
+  Truck,
   Users,
   Wrench,
 } from "lucide-react";
@@ -20,11 +21,18 @@ import PlanillaDashboard from "@/components/PlanillaDashboard";
 import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDashboard";
 import ConsumiblesAdminDashboard from "@/components/ConsumiblesAdminDashboard";
 import ConsumiblesAlmacenDashboard from "@/components/ConsumiblesAlmacenDashboard";
+import LogisticaDashboard from "@/components/LogisticaDashboard";
 
-type View = "landing" | "login" | "dashboard" | "warehouse" | "administracion";
+type View =
+  | "landing"
+  | "login"
+  | "dashboard"
+  | "warehouse"
+  | "administracion"
+  | "logistica";
 type WarehouseTab = "herramientas" | "consumibles";
 type AdminTab = "planilla" | "herramientas" | "consumibles";
-type ActiveAreaId = "almacen" | "administracion";
+type ActiveAreaId = "almacen" | "administracion" | "logistica";
 
 const SESSION_KEY = "nexo_session";
 const VIEW_KEY = "nexo_view";
@@ -33,6 +41,7 @@ const PERSISTABLE_VIEWS: View[] = [
   "dashboard",
   "warehouse",
   "administracion",
+  "logistica",
 ];
 
 type NexoSession = {
@@ -109,6 +118,18 @@ const areaBlocks = [
       "border-emerald-500/20 bg-gradient-to-br from-emerald-600 to-emerald-800 text-white shadow-lg shadow-emerald-600/25 hover:-translate-y-1 hover:shadow-xl",
     descriptionClass: "text-emerald-100",
     ctaClass: "text-emerald-100",
+  },
+  {
+    id: "logistica",
+    title: "LOGÍSTICA",
+    description: "Control de OT, repuestos pendientes y seguimiento.",
+    icon: Truck,
+    active: true,
+    iconBg: "bg-white/20",
+    cardClass:
+      "border-sky-500/20 bg-gradient-to-br from-sky-600 to-sky-800 text-white shadow-lg shadow-sky-600/25 hover:-translate-y-1 hover:shadow-xl",
+    descriptionClass: "text-sky-100",
+    ctaClass: "text-sky-100",
   },
   {
     id: "operaciones",
@@ -467,12 +488,12 @@ function DashboardView({
           Panel principal
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted sm:text-base">
-          Selecciona un área para continuar. Almacén y Administración están
-          listos para operar.
+          Selecciona un área para continuar. Almacén, Administración y
+          Logística están listos para operar.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {areaBlocks.map((area) => {
           const Icon = area.icon;
           const isActive = area.active;
@@ -680,6 +701,29 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
   );
 }
 
+function LogisticaView() {
+  return (
+    <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h1 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
+          Logística
+        </h1>
+        <span className="inline-flex items-center gap-1 rounded-full bg-sky-600/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+          <Truck className="h-3 w-3" aria-hidden />
+          Módulo activo
+        </span>
+        <p className="hidden text-xs text-muted sm:inline">
+          Control de OT y repuestos pendientes del taller.
+        </p>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-surface p-2 shadow-md shadow-slate-200/50 sm:p-3">
+        <LogisticaDashboard />
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("landing");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -723,11 +767,19 @@ export default function Home() {
       setView("warehouse");
       return;
     }
+    if (areaId === "logistica") {
+      setView("logistica");
+      return;
+    }
     setView("administracion");
   }
 
   function handleBack() {
-    if (view === "warehouse" || view === "administracion") {
+    if (
+      view === "warehouse" ||
+      view === "administracion" ||
+      view === "logistica"
+    ) {
       setView("dashboard");
       return;
     }
@@ -737,9 +789,16 @@ export default function Home() {
   }
 
   const showBack =
-    view === "warehouse" || view === "administracion" || view === "login";
+    view === "warehouse" ||
+    view === "administracion" ||
+    view === "logistica" ||
+    view === "login";
   const backLabel =
-    view === "warehouse" || view === "administracion" ? "Panel" : "Inicio";
+    view === "warehouse" ||
+    view === "administracion" ||
+    view === "logistica"
+      ? "Panel"
+      : "Inicio";
 
   if (!sessionReady) {
     return (
@@ -772,6 +831,7 @@ export default function Home() {
       {view === "administracion" && isAuthenticated && (
         <AdministracionView onBack={() => setView("dashboard")} />
       )}
+      {view === "logistica" && isAuthenticated && <LogisticaView />}
     </AppShell>
   );
 }
