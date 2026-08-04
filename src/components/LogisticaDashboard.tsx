@@ -23,18 +23,15 @@ type LogisticaTab = "control-ot";
 const OT_STATUS_LABELS: Record<string, string> = {
   WAITING_FOR_ASSIGNMENT: "Espera asignación",
   WAITING_FOR_REPAIR: "Espera reparación",
+  WAITING_FOR_VALUATION: "Espera valuación",
   IN_REPAIR: "En reparación",
+  PARALYZED: "Paralizado",
   STOPPED: "Paralizado",
   QUALITY_CONTROL: "Control calidad",
   VEHICLE_READY: "Vehículo listo",
+  LIQUIDATED: "Liquidado",
   SETTLED: "Liquidado",
   BILLED: "Facturado (P)",
-};
-
-const LINEA_ESTADO_LABELS: Record<string, string> = {
-  UNATTENDED: "Sin Atender",
-  ATTENDED: "Atendido",
-  IN_REQUEST: "En Solicitud",
 };
 
 function asText(value: unknown) {
@@ -95,8 +92,50 @@ function labelOtStatus(code: string) {
   return OT_STATUS_LABELS[code] ?? code;
 }
 
-function labelLineaEstado(code: string) {
-  return LINEA_ESTADO_LABELS[code] ?? code;
+function hasFechaEntrega(value: string | null | undefined) {
+  if (value == null) return false;
+  const trimmed = value.trim();
+  return trimmed !== "" && trimmed !== "-";
+}
+
+function rowHighlightClass(item: DetalleOtPendiente) {
+  if (hasFechaEntrega(item.linea_fecha_entrega)) {
+    return "bg-green-50 transition hover:bg-green-100/70";
+  }
+  if (item.ot_status === "VEHICLE_READY") {
+    return "bg-red-50 transition hover:bg-red-100/70";
+  }
+  return "transition hover:bg-accent/5";
+}
+
+function matchesTextAndTipo(
+  item: DetalleOtPendiente,
+  textQuery: string,
+  filterTipoOperacion: string
+) {
+  if (textQuery) {
+    const estadoTraducido = item.ot_status
+      ? labelOtStatus(item.ot_status)
+      : "";
+    const haystack = normalize(
+      [
+        item.vehiculo_placa ?? "",
+        item.linea_codigo ?? "",
+        item.linea_descripcion ?? "",
+        estadoTraducido,
+      ].join(" ")
+    );
+    if (!haystack.includes(textQuery)) return false;
+  }
+
+  if (
+    filterTipoOperacion &&
+    item.ot_tipo_operacion !== filterTipoOperacion
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function mapDetalleRow(row: Record<string, unknown>): DetalleOtPendiente {
@@ -132,6 +171,15 @@ function rowKey(item: DetalleOtPendiente, index: number) {
   ].join("|");
 }
 
+function sortOtNumeros(values: string[]) {
+  return values.sort((a, b) => {
+    const na = Number(a);
+    const nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return a.localeCompare(b, "es", { numeric: true });
+  });
+}
+
 export default function LogisticaDashboard() {
   const [tab] = useState<LogisticaTab>("control-ot");
   const [items, setItems] = useState<DetalleOtPendiente[]>([]);
@@ -140,8 +188,7 @@ export default function LogisticaDashboard() {
   const [filterOtNumero, setFilterOtNumero] = useState("");
   const [filterTexto, setFilterTexto] = useState("");
   const [filterTipoOperacion, setFilterTipoOperacion] = useState("");
-  const [filterOtStatus, setFilterOtStatus] = useState("");
-  const [filterLineaEstado, setFilterLineaEstado] = useState("");
+  const [hideGreenRows, setHideGreenRows] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{
     type: "success" | "error";
@@ -245,31 +292,35 @@ export default function LogisticaDashboard() {
     [items]
   );
 
-  const otStatusOptions = useMemo(
-    () => uniqueSorted(items.map((i) => i.ot_status)),
-    [items]
-  );
-
-  const lineaEstadoOptions = useMemo(
-    () => uniqueSorted(items.map((i) => i.linea_estado)),
-    [items]
-  );
+  const rowsForOtOptions = useMemo(() => {
+    const textQuery = normalize(filterTexto);
+    return items.filter((item) => {
+      if (!matchesTextAndTipo(item, textQuery, filterTipoOperacion)) {
+        return false;
+      }
+      if (hideGreenRows && hasFechaEntrega(item.linea_fecha_entrega)) {
+        return false;
+      }
+      return true;
+    });
+  }, [items, filterTexto, filterTipoOperacion, hideGreenRows]);
 
   const otNumeroOptions = useMemo(() => {
     const unique = Array.from(
       new Set(
-        items
+        rowsForOtOptions
           .map((i) => (i.ot_numero != null ? String(i.ot_numero).trim() : ""))
           .filter((v) => v !== "")
       )
     );
-    return unique.sort((a, b) => {
-      const na = Number(a);
-      const nb = Number(b);
-      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-      return a.localeCompare(b, "es", { numeric: true });
-    });
-  }, [items]);
+    return sortOtNumeros(unique);
+  }, [rowsForOtOptions]);
+
+  useEffect(() => {
+    if (filterOtNumero && !otNumeroOptions.includes(filterOtNumero)) {
+      setFilterOtNumero("");
+    }
+  }, [filterOtNumero, otNumeroOptions]);
 
   const filtered = useMemo(() => {
     const textQuery = normalize(filterTexto);
@@ -280,29 +331,14 @@ export default function LogisticaDashboard() {
         if (ot !== filterOtNumero) return false;
       }
 
-      if (textQuery) {
-        const haystack = normalize(
-          [
-            item.vehiculo_placa ?? "",
-            item.linea_codigo ?? "",
-            item.linea_descripcion ?? "",
-          ].join(" ")
-        );
-        if (!haystack.includes(textQuery)) return false;
+      if (!matchesTextAndTipo(item, textQuery, filterTipoOperacion)) {
+        return false;
       }
 
-      if (
-        filterTipoOperacion &&
-        item.ot_tipo_operacion !== filterTipoOperacion
-      ) {
+      if (hideGreenRows && hasFechaEntrega(item.linea_fecha_entrega)) {
         return false;
       }
-      if (filterOtStatus && item.ot_status !== filterOtStatus) {
-        return false;
-      }
-      if (filterLineaEstado && item.linea_estado !== filterLineaEstado) {
-        return false;
-      }
+
       return true;
     });
   }, [
@@ -310,50 +346,128 @@ export default function LogisticaDashboard() {
     filterOtNumero,
     filterTexto,
     filterTipoOperacion,
-    filterOtStatus,
-    filterLineaEstado,
+    hideGreenRows,
   ]);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div
-          role="tablist"
-          aria-label="Secciones de logística"
-          className="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-border/80 bg-slate-50/80"
+      <div
+        role="tablist"
+        aria-label="Secciones de logística"
+        className="flex overflow-hidden rounded-xl border border-border/80 bg-slate-50/80"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "control-ot"}
+          className="relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "control-ot"}
-            className="relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
-          >
-            <ClipboardList className="h-4 w-4" aria-hidden />
-            <span className="truncate">Control OT</span>
-            <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
-          </button>
-        </div>
+          <ClipboardList className="h-4 w-4" aria-hidden />
+          <span className="truncate">Control OT</span>
+          <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+        </button>
+      </div>
 
-        <div className="flex shrink-0 flex-col items-stretch gap-1 sm:items-end">
-          <button
-            type="button"
-            onClick={() => void handleSyncOt()}
-            disabled={syncing}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {syncing ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                Sincronizando...
-              </>
-            ) : (
-              "🔄 Sincronizar OT"
-            )}
-          </button>
+      {tab === "control-ot" ? (
+        <div role="tabpanel" className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-3">
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-3">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  OT
+                </span>
+                <select
+                  value={filterOtNumero}
+                  onChange={(e) => setFilterOtNumero(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="">Todas las OT</option>
+                  {otNumeroOptions.map((ot) => (
+                    <option key={ot} value={ot}>
+                      {ot}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Buscar
+                </span>
+                <div className="relative">
+                  <input
+                    type="search"
+                    value={filterTexto}
+                    onChange={(e) => setFilterTexto(e.target.value)}
+                    placeholder="Buscar por Placa, Código o Descripción..."
+                    className="w-full rounded-xl border border-border bg-white py-2.5 pl-3 pr-9 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                  />
+                  {filterTexto ? (
+                    <button
+                      type="button"
+                      onClick={() => setFilterTexto("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:text-slate-700"
+                      aria-label="Limpiar búsqueda"
+                      title="Limpiar"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                      <span className="sr-only">✕</span>
+                    </button>
+                  ) : null}
+                </div>
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Tipo Operación
+                </span>
+                <select
+                  value={filterTipoOperacion}
+                  onChange={(e) => setFilterTipoOperacion(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                >
+                  <option value="">Todos</option>
+                  {tipoOperacionOptions.map((tipo) => (
+                    <option key={tipo} value={tipo}>
+                      {tipo}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+              <button
+                type="button"
+                onClick={() => setHideGreenRows((prev) => !prev)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
+              >
+                {hideGreenRows
+                  ? "⚪ Mostrar con fecha"
+                  : "🟢 Ocultar con fecha"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSyncOt()}
+                disabled={syncing}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {syncing ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    Sincronizando...
+                  </>
+                ) : (
+                  "🔄 Sincronizar OT"
+                )}
+              </button>
+            </div>
+          </div>
+
           {syncMessage ? (
             <p
               role="status"
-              className={`text-[11px] ${
+              className={`text-right text-[11px] ${
                 syncMessage.type === "success"
                   ? "text-emerald-700"
                   : "text-red-600"
@@ -362,203 +476,106 @@ export default function LogisticaDashboard() {
               {syncMessage.text}
             </p>
           ) : null}
-        </div>
-      </div>
 
-      <div role="tabpanel" className="space-y-4">
-        <div className="grid gap-3 lg:grid-cols-5">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              OT
-            </span>
-            <select
-              value={filterOtNumero}
-              onChange={(e) => setFilterOtNumero(e.target.value)}
-              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+          {error ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
             >
-              <option value="">Todas las OT</option>
-              {otNumeroOptions.map((ot) => (
-                <option key={ot} value={ot}>
-                  {ot}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block lg:col-span-1">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Buscar
-            </span>
-            <div className="relative">
-              <input
-                type="search"
-                value={filterTexto}
-                onChange={(e) => setFilterTexto(e.target.value)}
-                placeholder="Buscar por Placa, Código o Descripción..."
-                className="w-full rounded-xl border border-border bg-white py-2.5 pl-3 pr-9 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20"
-              />
-              {filterTexto ? (
-                <button
-                  type="button"
-                  onClick={() => setFilterTexto("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:text-slate-700"
-                  aria-label="Limpiar búsqueda"
-                  title="Limpiar"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden />
-                  <span className="sr-only">✕</span>
-                </button>
-              ) : null}
-            </div>
-          </label>
-
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Tipo Operación
-            </span>
-            <select
-              value={filterTipoOperacion}
-              onChange={(e) => setFilterTipoOperacion(e.target.value)}
-              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              <option value="">Todos</option>
-              {tipoOperacionOptions.map((tipo) => (
-                <option key={tipo} value={tipo}>
-                  {tipo}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Estado OT
-            </span>
-            <select
-              value={filterOtStatus}
-              onChange={(e) => setFilterOtStatus(e.target.value)}
-              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              <option value="">Todos</option>
-              {otStatusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {labelOtStatus(status)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Estado Repuesto
-            </span>
-            <select
-              value={filterLineaEstado}
-              onChange={(e) => setFilterLineaEstado(e.target.value)}
-              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-            >
-              <option value="">Todos</option>
-              {lineaEstadoOptions.map((estado) => (
-                <option key={estado} value={estado}>
-                  {labelLineaEstado(estado)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {error ? (
-          <div
-            role="alert"
-            className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-          >
-            {error}
-          </div>
-        ) : null}
-
-        <div className="overflow-hidden rounded-xl border border-border">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-border text-left text-sm">
-              <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-3">OT</th>
-                  <th className="px-4 py-3">Modelo</th>
-                  <th className="px-4 py-3">Placa</th>
-                  <th className="px-4 py-3">Codigo</th>
-                  <th className="px-4 py-3">Descripcion</th>
-                  <th className="px-4 py-3">Cantidad</th>
-                  <th className="px-4 py-3">Precio Unit</th>
-                  <th className="px-4 py-3">Fecha Entrega</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border bg-white">
-                {loading ? (
-                  <tr>
-                    <td
-                      colSpan={8}
-                      className="px-4 py-12 text-center text-muted"
-                    >
-                      <span className="inline-flex items-center gap-2 text-sm">
-                        <Loader2 className="h-4 w-4 animate-spin text-accent" />
-                        Cargando Control OT…
-                      </span>
-                    </td>
-                  </tr>
-                ) : filtered.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={8}
-                      className="px-4 py-12 text-center text-muted"
-                    >
-                      No se encontraron registros
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((item, index) => (
-                    <tr
-                      key={rowKey(item, index)}
-                      className="transition hover:bg-accent/5"
-                    >
-                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-accent">
-                        {item.ot_numero != null && item.ot_numero !== ""
-                          ? String(item.ot_numero)
-                          : "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                        {item.vehiculo_modelo || "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 font-medium text-foreground">
-                        {item.vehiculo_placa || "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
-                        {item.linea_codigo || "—"}
-                      </td>
-                      <td className="max-w-xs px-4 py-3 text-slate-700">
-                        {item.linea_descripcion || "—"}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                        {formatCantidad(item.linea_cantidad)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
-                        {formatPrecioPen(item.linea_precio_unitario_pen)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
-                        {formatFechaEntrega(item.linea_fecha_entrega)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          {!loading ? (
-            <div className="border-t border-border bg-slate-50/80 px-4 py-2.5 text-xs text-muted">
-              {filtered.length} de {items.length} registro
-              {items.length === 1 ? "" : "s"}
+              {error}
             </div>
           ) : null}
+
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-border text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">OT</th>
+                    <th className="px-4 py-3">Estado OT</th>
+                    <th className="px-4 py-3">Modelo</th>
+                    <th className="px-4 py-3">Placa</th>
+                    <th className="px-4 py-3">Codigo</th>
+                    <th className="px-4 py-3">Descripcion</th>
+                    <th className="px-4 py-3">Cantidad</th>
+                    <th className="px-4 py-3">Precio Unit</th>
+                    <th className="px-4 py-3">Fecha Entrega</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-white">
+                  {loading ? (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        <span className="inline-flex items-center gap-2 text-sm">
+                          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                          Cargando Control OT…
+                        </span>
+                      </td>
+                    </tr>
+                  ) : filtered.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        No se encontraron registros
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((item, index) => (
+                      <tr
+                        key={rowKey(item, index)}
+                        className={rowHighlightClass(item)}
+                      >
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-accent">
+                          {item.ot_numero != null && item.ot_numero !== ""
+                            ? String(item.ot_numero)
+                            : "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                          {item.ot_status
+                            ? labelOtStatus(item.ot_status)
+                            : "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                          {item.vehiculo_modelo || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-medium text-foreground">
+                          {item.vehiculo_placa || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                          {item.linea_codigo || "—"}
+                        </td>
+                        <td className="max-w-xs px-4 py-3 text-slate-700">
+                          {item.linea_descripcion || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                          {formatCantidad(item.linea_cantidad)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">
+                          {formatPrecioPen(item.linea_precio_unitario_pen)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                          {formatFechaEntrega(item.linea_fecha_entrega)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {!loading ? (
+              <div className="border-t border-border bg-slate-50/80 px-4 py-2.5 text-xs text-muted">
+                {filtered.length} de {items.length} registro
+                {items.length === 1 ? "" : "s"}
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
