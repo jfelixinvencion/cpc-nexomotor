@@ -33,12 +33,26 @@ type SigmaSpare = {
   [key: string]: unknown;
 };
 
+type SigmaCar = {
+  plate?: string | null;
+  [key: string]: unknown;
+};
+
+type SigmaClient = {
+  names?: string | null;
+  first_lastname?: string | null;
+  second_lastname?: string | null;
+  [key: string]: unknown;
+};
+
 type SpareDetailPayload = {
   id?: string | number | null;
   work_order_number?: string | number | null;
   number?: string | number | null;
   plate?: string | null;
   client_name?: string | null;
+  car?: SigmaCar | null;
+  client?: SigmaClient | null;
   spares?: SigmaSpare[] | null;
   services?: unknown;
   [key: string]: unknown;
@@ -387,6 +401,12 @@ function extractDetailData(json: unknown): SpareDetailPayload | null {
   if (!json || typeof json !== "object") return null;
 
   const root = json as Record<string, unknown>;
+
+  // Observed shape: root-level { id, number, car, spares, client, ... }
+  if (Array.isArray(root.spares) || root.car != null || root.id != null) {
+    return root as SpareDetailPayload;
+  }
+
   let nested: unknown = root.data;
 
   if (typeof nested === "string") {
@@ -399,7 +419,11 @@ function extractDetailData(json: unknown): SpareDetailPayload | null {
 
   if (nested && typeof nested === "object") {
     const dataObj = nested as Record<string, unknown>;
-    if (Array.isArray(dataObj.spares) || dataObj.id != null) {
+    if (
+      Array.isArray(dataObj.spares) ||
+      dataObj.car != null ||
+      dataObj.id != null
+    ) {
       return dataObj as SpareDetailPayload;
     }
     const workOrder = dataObj.work_order;
@@ -407,9 +431,7 @@ function extractDetailData(json: unknown): SpareDetailPayload | null {
       return workOrder as SpareDetailPayload;
     }
   }
-  if (Array.isArray(root.spares) || root.id != null) {
-    return root as SpareDetailPayload;
-  }
+
   return null;
 }
 
@@ -531,16 +553,51 @@ function resolveOtNumero(
   detail: SpareDetailPayload,
   fallbackFromList: string | null
 ): string | null {
+  // Prefer detalle.number (root field in dms-api), then work_order_number.
   return (
-    asNonEmptyString(detail.work_order_number) ??
     asNonEmptyString(detail.number) ??
+    asNonEmptyString(detail.work_order_number) ??
     fallbackFromList
   );
 }
 
+/** placa from detalle.car?.plate ?? detalle.plate */
+function resolvePlaca(detail: SpareDetailPayload): string | null {
+  const fromCar =
+    detail.car && typeof detail.car === "object"
+      ? asNonEmptyString(detail.car.plate)
+      : null;
+  return fromCar ?? asNonEmptyString(detail.plate);
+}
+
 /**
- * Map detail → rows. If `spares` is missing/empty, returns [] (skip OT).
- * Never throws on missing spares/services.
+ * cliente_nombre from client.names + first_lastname + second_lastname
+ * (omit null parts). Fallback to client_name if present.
+ */
+function resolveClienteNombre(detail: SpareDetailPayload): string | null {
+  const client = detail.client;
+  if (client && typeof client === "object") {
+    const parts = [
+      asNonEmptyString(client.names),
+      asNonEmptyString(client.first_lastname),
+      asNonEmptyString(client.second_lastname),
+    ].filter((p): p is string => p != null);
+    if (parts.length > 0) return parts.join(" ");
+  }
+  return asNonEmptyString(detail.client_name);
+}
+
+function rowConflictKey(row: {
+  ot_id: number;
+  linea_codigo: string;
+  linea_fecha_entrega: string;
+}): string {
+  return `${row.ot_id}|${row.linea_codigo}|${row.linea_fecha_entrega}`;
+}
+
+/**
+ * Map detail → rows. Header fields (placa, cliente, ot_numero) are shared
+ * across every spare line of the OT.
  */
 function rowsFromDetail(
   detail: SpareDetailPayload | null | undefined,
@@ -564,6 +621,9 @@ function rowsFromDetail(
     return [];
   }
 
+  const placa = resolvePlaca(detail);
+  const clienteNombre = resolveClienteNombre(detail);
+
   const rows: LogisticaInversaRow[] = [];
 
   for (const spare of detail.spares) {
@@ -576,8 +636,8 @@ function rowsFromDetail(
     rows.push({
       ot_id: otId,
       ot_numero: otNumero,
-      placa: asNonEmptyString(detail.plate),
-      cliente_nombre: asNonEmptyString(detail.client_name),
+      placa,
+      cliente_nombre: clienteNombre,
       linea_codigo: codigo,
       linea_descripcion: asNonEmptyString(spare.description),
       linea_cantidad:
@@ -594,10 +654,20 @@ function rowsFromDetail(
   return rows;
 }
 
-async function insertIgnoreDuplicates(
+/**
+ * Insert new rows; on conflict fill placa/cliente_nombre/ot_numero ONLY when
+ * the existing column is NULL. Never touch manual fields
+ * (responsable_entrega, estado_repuesto, observaciones).
+ *
+ * Equivalent to:
+ *   ON CONFLICT (...) DO UPDATE SET
+ *     placa = COALESCE(logistica_inversa.placa, EXCLUDED.placa),
+ *     cliente_nombre = COALESCE(..., EXCLUDED.cliente_nombre),
+ *     ot_numero = COALESCE(..., EXCLUDED.ot_numero)
+ */
+async function upsertFillNullHeaders(
   rows: LogisticaInversaRow[]
 ): Promise<number> {
-  // Extra safety: never send null ot_numero (NOT NULL constraint).
   const valid = rows.filter(
     (r) =>
       r.ot_numero != null &&
@@ -611,13 +681,73 @@ async function insertIgnoreDuplicates(
   let attempted = 0;
   for (let i = 0; i < valid.length; i += INSERT_BATCH) {
     const batch = valid.slice(i, i + INSERT_BATCH);
-    const { error } = await supabaseAdmin.from("logistica_inversa").upsert(batch, {
-      onConflict: "ot_id,linea_codigo,linea_fecha_entrega",
-      ignoreDuplicates: true,
-    });
 
-    if (error) {
-      throw new Error(`Supabase upsert: ${error.message}`);
+    const { error: insertError } = await supabaseAdmin
+      .from("logistica_inversa")
+      .upsert(batch, {
+        onConflict: "ot_id,linea_codigo,linea_fecha_entrega",
+        ignoreDuplicates: true,
+      });
+
+    if (insertError) {
+      throw new Error(`Supabase upsert insert: ${insertError.message}`);
+    }
+
+    const otIds = Array.from(new Set(batch.map((r) => r.ot_id)));
+    const { data: existing, error: selectError } = await supabaseAdmin
+      .from("logistica_inversa")
+      .select(
+        "id, ot_id, linea_codigo, linea_fecha_entrega, placa, cliente_nombre, ot_numero"
+      )
+      .in("ot_id", otIds)
+      .or("placa.is.null,cliente_nombre.is.null,ot_numero.is.null");
+
+    if (selectError) {
+      throw new Error(`Supabase select backfill: ${selectError.message}`);
+    }
+
+    const incomingByKey = new Map(
+      batch.map((r) => [rowConflictKey(r), r] as const)
+    );
+
+    for (const ex of existing ?? []) {
+      const incoming = incomingByKey.get(
+        rowConflictKey({
+          ot_id: Number(ex.ot_id),
+          linea_codigo: String(ex.linea_codigo),
+          linea_fecha_entrega: String(ex.linea_fecha_entrega),
+        })
+      );
+      if (!incoming) continue;
+
+      const patch: {
+        placa?: string;
+        cliente_nombre?: string;
+        ot_numero?: string;
+      } = {};
+
+      if (ex.placa == null && incoming.placa != null) {
+        patch.placa = incoming.placa;
+      }
+      if (ex.cliente_nombre == null && incoming.cliente_nombre != null) {
+        patch.cliente_nombre = incoming.cliente_nombre;
+      }
+      if (ex.ot_numero == null && incoming.ot_numero != null) {
+        patch.ot_numero = incoming.ot_numero;
+      }
+
+      if (Object.keys(patch).length === 0) continue;
+
+      const { error: updateError } = await supabaseAdmin
+        .from("logistica_inversa")
+        .update(patch)
+        .eq("id", ex.id);
+
+      if (updateError) {
+        throw new Error(
+          `Supabase backfill update id=${ex.id}: ${updateError.message}`
+        );
+      }
     }
 
     attempted += batch.length;
@@ -851,7 +981,7 @@ export async function POST(request: NextRequest) {
 
     let insertedAttempted = 0;
     try {
-      insertedAttempted = await insertIgnoreDuplicates(collected);
+      insertedAttempted = await upsertFillNullHeaders(collected);
     } catch (insertErr) {
       const message = errorMessage(insertErr);
       console.error("[sync-inversa] insert failed:", message);
