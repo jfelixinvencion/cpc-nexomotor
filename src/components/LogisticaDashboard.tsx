@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ClipboardList, Loader2, X } from "lucide-react";
+import { ClipboardList, Loader2, RotateCcw, X } from "lucide-react";
+import { supabase } from "@/lib/supabase/client";
 
 export type DetalleOtPendiente = {
   ot_numero: string | number | null;
@@ -18,7 +19,26 @@ export type DetalleOtPendiente = {
   linea_tipo: string | null;
 };
 
-type LogisticaTab = "control-ot";
+export type LogisticaInversaRow = {
+  id: number;
+  ot_id: number | null;
+  ot_numero: string | number | null;
+  placa: string | null;
+  linea_codigo: string | null;
+  linea_descripcion: string | null;
+  linea_cantidad: number | string | null;
+  linea_fecha_entrega: string | null;
+  responsable_entrega: string | null;
+  estado_repuesto: string | null;
+  observaciones: string | null;
+};
+
+type LogisticaTab = "control-ot" | "inversa";
+
+type EditableInversaField =
+  | "responsable_entrega"
+  | "estado_repuesto"
+  | "observaciones";
 
 const OT_STATUS_LABELS: Record<string, string> = {
   WAITING_FOR_ASSIGNMENT: "Espera asignación",
@@ -33,6 +53,17 @@ const OT_STATUS_LABELS: Record<string, string> = {
   SETTLED: "Liquidado",
   BILLED: "Facturado (P)",
 };
+
+const ESTADO_REPUESTO_OPTIONS = [
+  "",
+  "Pendiente",
+  "Entregado",
+  "En revisión",
+  "Devuelto",
+  "Rechazado",
+] as const;
+
+const INVERSA_SAVE_DEBOUNCE_MS = 600;
 
 function asText(value: unknown) {
   if (value == null) return "";
@@ -86,6 +117,13 @@ function formatFechaEntrega(value: string | null | undefined) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
+}
+
+/** YYYY-MM-DD for date-range comparisons, or null if unparseable. */
+function toDateOnly(value: string | null | undefined): string | null {
+  if (value == null || value.trim() === "") return null;
+  const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
 }
 
 function labelOtStatus(code: string) {
@@ -161,6 +199,28 @@ function mapDetalleRow(row: Record<string, unknown>): DetalleOtPendiente {
   };
 }
 
+function mapInversaRow(row: Record<string, unknown>): LogisticaInversaRow {
+  return {
+    id: Number(row.id),
+    ot_id:
+      row.ot_id == null || !Number.isFinite(Number(row.ot_id))
+        ? null
+        : Number(row.ot_id),
+    ot_numero: (row.ot_numero as string | number | null) ?? null,
+    placa: asText(row.placa) || null,
+    linea_codigo: asText(row.linea_codigo) || null,
+    linea_descripcion: asText(row.linea_descripcion) || null,
+    linea_cantidad:
+      row.linea_cantidad == null
+        ? null
+        : (row.linea_cantidad as number | string),
+    linea_fecha_entrega: asText(row.linea_fecha_entrega) || null,
+    responsable_entrega: asText(row.responsable_entrega) || null,
+    estado_repuesto: asText(row.estado_repuesto) || null,
+    observaciones: asText(row.observaciones) || null,
+  };
+}
+
 function rowKey(item: DetalleOtPendiente, index: number) {
   return [
     item.ot_numero ?? "",
@@ -181,7 +241,9 @@ function sortOtNumeros(values: string[]) {
 }
 
 export default function LogisticaDashboard() {
-  const [tab] = useState<LogisticaTab>("control-ot");
+  const [tab, setTab] = useState<LogisticaTab>("control-ot");
+
+  // --- Control OT ---
   const [items, setItems] = useState<DetalleOtPendiente[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +257,31 @@ export default function LogisticaDashboard() {
     text: string;
   } | null>(null);
   const syncMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- Logística Inversa ---
+  const [inversaItems, setInversaItems] = useState<LogisticaInversaRow[]>([]);
+  const [inversaLoading, setInversaLoading] = useState(false);
+  const [inversaError, setInversaError] = useState<string | null>(null);
+  const [inversaFilterTexto, setInversaFilterTexto] = useState("");
+  const [inversaFechaDesde, setInversaFechaDesde] = useState("");
+  const [inversaFechaHasta, setInversaFechaHasta] = useState("");
+  const [inversaSyncing, setInversaSyncing] = useState(false);
+  const [inversaSyncMessage, setInversaSyncMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
+  const [saveErrors, setSaveErrors] = useState<Record<number, string>>({});
+  const inversaLoadedRef = useRef(false);
+  const inversaSaveTimers = useRef<
+    Map<number, ReturnType<typeof setTimeout>>
+  >(new Map());
+  const inversaPendingPatches = useRef<
+    Map<number, Partial<Pick<LogisticaInversaRow, EditableInversaField>>>
+  >(new Map());
+  const inversaSyncMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const fetchDetalle = useCallback(async () => {
     setLoading(true);
@@ -224,14 +311,49 @@ export default function LogisticaDashboard() {
     }
   }, []);
 
+  const fetchInversa = useCallback(async () => {
+    setInversaLoading(true);
+    setInversaError(null);
+
+    const { data, error: fetchError } = await supabase
+      .from("logistica_inversa")
+      .select(
+        "id, ot_id, ot_numero, placa, linea_codigo, linea_descripcion, linea_cantidad, linea_fecha_entrega, responsable_entrega, estado_repuesto, observaciones"
+      )
+      .order("linea_fecha_entrega", { ascending: false });
+
+    if (fetchError) {
+      setInversaError(fetchError.message);
+      setInversaItems([]);
+      setInversaLoading(false);
+      return;
+    }
+
+    setInversaItems((data ?? []).map(mapInversaRow));
+    inversaLoadedRef.current = true;
+    setInversaLoading(false);
+  }, []);
+
   useEffect(() => {
     void fetchDetalle();
   }, [fetchDetalle]);
 
   useEffect(() => {
+    if (tab === "inversa" && !inversaLoadedRef.current) {
+      void fetchInversa();
+    }
+  }, [tab, fetchInversa]);
+
+  useEffect(() => {
     return () => {
       if (syncMessageTimer.current) {
         clearTimeout(syncMessageTimer.current);
+      }
+      if (inversaSyncMessageTimer.current) {
+        clearTimeout(inversaSyncMessageTimer.current);
+      }
+      for (const timer of inversaSaveTimers.current.values()) {
+        clearTimeout(timer);
       }
     };
   }, []);
@@ -244,6 +366,17 @@ export default function LogisticaDashboard() {
     syncMessageTimer.current = setTimeout(() => {
       setSyncMessage(null);
       syncMessageTimer.current = null;
+    }, 4000);
+  }
+
+  function showInversaSyncMessage(type: "success" | "error", text: string) {
+    if (inversaSyncMessageTimer.current) {
+      clearTimeout(inversaSyncMessageTimer.current);
+    }
+    setInversaSyncMessage({ type, text });
+    inversaSyncMessageTimer.current = setTimeout(() => {
+      setInversaSyncMessage(null);
+      inversaSyncMessageTimer.current = null;
     }, 4000);
   }
 
@@ -285,6 +418,121 @@ export default function LogisticaDashboard() {
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function handleSyncInversa() {
+    if (inversaSyncing) return;
+    setInversaSyncing(true);
+    setInversaSyncMessage(null);
+
+    try {
+      const res = await fetch("/api/logistica/trigger-sync?target=inversa", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        errors?: unknown;
+      };
+
+      if (!res.ok || json.success === false) {
+        const detail =
+          json.error ||
+          (Array.isArray(json.errors) && json.errors.length > 0
+            ? typeof json.errors[0] === "object" &&
+              json.errors[0] !== null &&
+              "error" in json.errors[0]
+              ? String(
+                  (json.errors[0] as { error?: unknown }).error ??
+                    json.errors[0]
+                )
+              : String(json.errors[0])
+            : null) ||
+          `Error HTTP ${res.status}`;
+        throw new Error(detail);
+      }
+
+      await fetchInversa();
+      showInversaSyncMessage("success", "✅ Historial sincronizado");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Error al sincronizar";
+      await fetchInversa();
+      showInversaSyncMessage("error", message);
+    } finally {
+      setInversaSyncing(false);
+    }
+  }
+
+  async function persistInversaPatch(
+    id: number,
+    patch: Partial<Pick<LogisticaInversaRow, EditableInversaField>>
+  ) {
+    setSavingIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+
+    const { error: updateError } = await supabase
+      .from("logistica_inversa")
+      .update(patch)
+      .eq("id", id);
+
+    setSavingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+
+    if (updateError) {
+      setSaveErrors((prev) => ({ ...prev, [id]: updateError.message }));
+      return;
+    }
+
+    setSaveErrors((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function handleInversaFieldChange(
+    id: number,
+    field: EditableInversaField,
+    value: string
+  ) {
+    const normalized = value.trim() === "" ? null : value;
+
+    setInversaItems((prev) =>
+      prev.map((row) =>
+        row.id === id ? { ...row, [field]: normalized } : row
+      )
+    );
+
+    const existing = inversaPendingPatches.current.get(id) ?? {};
+    inversaPendingPatches.current.set(id, {
+      ...existing,
+      [field]: normalized,
+    });
+
+    const prevTimer = inversaSaveTimers.current.get(id);
+    if (prevTimer) clearTimeout(prevTimer);
+
+    const timer = setTimeout(() => {
+      const patch = inversaPendingPatches.current.get(id);
+      inversaPendingPatches.current.delete(id);
+      inversaSaveTimers.current.delete(id);
+      if (patch && Object.keys(patch).length > 0) {
+        void persistInversaPatch(id, patch);
+      }
+    }, INVERSA_SAVE_DEBOUNCE_MS);
+
+    inversaSaveTimers.current.set(id, timer);
   }
 
   const tipoOperacionOptions = useMemo(
@@ -349,6 +597,43 @@ export default function LogisticaDashboard() {
     hideGreenRows,
   ]);
 
+  const filteredInversa = useMemo(() => {
+    const textQuery = normalize(inversaFilterTexto);
+
+    return inversaItems.filter((item) => {
+      if (textQuery) {
+        const haystack = normalize(
+          [
+            item.placa ?? "",
+            item.linea_codigo ?? "",
+            item.linea_descripcion ?? "",
+          ].join(" ")
+        );
+        if (!haystack.includes(textQuery)) return false;
+      }
+
+      const fecha = toDateOnly(item.linea_fecha_entrega);
+      if (inversaFechaDesde) {
+        if (!fecha || fecha < inversaFechaDesde) return false;
+      }
+      if (inversaFechaHasta) {
+        if (!fecha || fecha > inversaFechaHasta) return false;
+      }
+
+      return true;
+    });
+  }, [
+    inversaItems,
+    inversaFilterTexto,
+    inversaFechaDesde,
+    inversaFechaHasta,
+  ]);
+
+  const tabButtonClass = (active: boolean) =>
+    active
+      ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
+      : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
+
   return (
     <div className="space-y-4">
       <div
@@ -360,11 +645,27 @@ export default function LogisticaDashboard() {
           type="button"
           role="tab"
           aria-selected={tab === "control-ot"}
-          className="relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
+          onClick={() => setTab("control-ot")}
+          className={tabButtonClass(tab === "control-ot")}
         >
           <ClipboardList className="h-4 w-4" aria-hidden />
           <span className="truncate">Control OT</span>
-          <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          {tab === "control-ot" ? (
+            <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          ) : null}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "inversa"}
+          onClick={() => setTab("inversa")}
+          className={tabButtonClass(tab === "inversa")}
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden />
+          <span className="truncate">Logística Inversa</span>
+          {tab === "inversa" ? (
+            <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          ) : null}
         </button>
       </div>
 
@@ -571,6 +872,257 @@ export default function LogisticaDashboard() {
               <div className="border-t border-border bg-slate-50/80 px-4 py-2.5 text-xs text-muted">
                 {filtered.length} de {items.length} registro
                 {items.length === 1 ? "" : "s"}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "inversa" ? (
+        <div role="tabpanel" className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-3">
+            <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-3">
+              <label className="block sm:col-span-1">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Buscar
+                </span>
+                <div className="relative">
+                  <input
+                    type="search"
+                    value={inversaFilterTexto}
+                    onChange={(e) => setInversaFilterTexto(e.target.value)}
+                    placeholder="Buscar por Placa, Código o Descripción..."
+                    className="w-full rounded-xl border border-border bg-white py-2.5 pl-3 pr-9 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                  />
+                  {inversaFilterTexto ? (
+                    <button
+                      type="button"
+                      onClick={() => setInversaFilterTexto("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:text-slate-700"
+                      aria-label="Limpiar búsqueda"
+                      title="Limpiar"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                      <span className="sr-only">✕</span>
+                    </button>
+                  ) : null}
+                </div>
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Fecha desde
+                </span>
+                <input
+                  type="date"
+                  value={inversaFechaDesde}
+                  onChange={(e) => setInversaFechaDesde(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Fecha hasta
+                </span>
+                <input
+                  type="date"
+                  value={inversaFechaHasta}
+                  onChange={(e) => setInversaFechaHasta(e.target.value)}
+                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+              </label>
+            </div>
+
+            <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+              <button
+                type="button"
+                onClick={() => void handleSyncInversa()}
+                disabled={inversaSyncing}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {inversaSyncing ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    Sincronizando...
+                  </>
+                ) : (
+                  "🔄 Sincronizar Historial"
+                )}
+              </button>
+            </div>
+          </div>
+
+          {inversaSyncMessage ? (
+            <p
+              role="status"
+              className={`text-right text-[11px] ${
+                inversaSyncMessage.type === "success"
+                  ? "text-emerald-700"
+                  : "text-red-600"
+              }`}
+            >
+              {inversaSyncMessage.text}
+            </p>
+          ) : null}
+
+          {inversaError ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              {inversaError}
+            </div>
+          ) : null}
+
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-border text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">OT</th>
+                    <th className="px-4 py-3">Placa</th>
+                    <th className="px-4 py-3">Código</th>
+                    <th className="px-4 py-3">Descripción</th>
+                    <th className="px-4 py-3">Cant.</th>
+                    <th className="px-4 py-3">Fecha Entrega</th>
+                    <th className="min-w-[9rem] px-4 py-3">Resp. Entrega</th>
+                    <th className="min-w-[9rem] px-4 py-3">Estado Repuesto</th>
+                    <th className="min-w-[12rem] px-4 py-3">Observaciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-white">
+                  {inversaLoading ? (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        <span className="inline-flex items-center gap-2 text-sm">
+                          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                          Cargando Logística Inversa…
+                        </span>
+                      </td>
+                    </tr>
+                  ) : filteredInversa.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={9}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        No se encontraron registros
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredInversa.map((item) => {
+                      const isSaving = savingIds.has(item.id);
+                      const saveError = saveErrors[item.id];
+                      return (
+                        <tr
+                          key={item.id}
+                          className="transition hover:bg-accent/5"
+                        >
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-accent">
+                            {item.ot_numero != null && item.ot_numero !== ""
+                              ? String(item.ot_numero)
+                              : "—"}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-medium text-foreground">
+                            {item.placa || "—"}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                            {item.linea_codigo || "—"}
+                          </td>
+                          <td className="max-w-xs px-4 py-3 text-slate-700">
+                            {item.linea_descripcion || "—"}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                            {formatCantidad(item.linea_cantidad)}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                            {formatFechaEntrega(item.linea_fecha_entrega)}
+                          </td>
+                          <td className="px-2 py-2 align-middle">
+                            <input
+                              type="text"
+                              value={item.responsable_entrega ?? ""}
+                              onChange={(e) =>
+                                handleInversaFieldChange(
+                                  item.id,
+                                  "responsable_entrega",
+                                  e.target.value
+                                )
+                              }
+                              placeholder="Responsable"
+                              className="w-full min-w-[7rem] rounded-lg border border-border bg-white px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                            />
+                          </td>
+                          <td className="px-2 py-2 align-middle">
+                            <select
+                              value={item.estado_repuesto ?? ""}
+                              onChange={(e) =>
+                                handleInversaFieldChange(
+                                  item.id,
+                                  "estado_repuesto",
+                                  e.target.value
+                                )
+                              }
+                              className="w-full min-w-[7rem] rounded-lg border border-border bg-white px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                            >
+                              {ESTADO_REPUESTO_OPTIONS.map((opt) => (
+                                <option key={opt || "empty"} value={opt}>
+                                  {opt || "Sin estado"}
+                                </option>
+                              ))}
+                              {item.estado_repuesto &&
+                              !ESTADO_REPUESTO_OPTIONS.includes(
+                                item.estado_repuesto as (typeof ESTADO_REPUESTO_OPTIONS)[number]
+                              ) ? (
+                                <option value={item.estado_repuesto}>
+                                  {item.estado_repuesto}
+                                </option>
+                              ) : null}
+                            </select>
+                          </td>
+                          <td className="px-2 py-2 align-middle">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={item.observaciones ?? ""}
+                                onChange={(e) =>
+                                  handleInversaFieldChange(
+                                    item.id,
+                                    "observaciones",
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Observaciones"
+                                className="w-full min-w-[10rem] rounded-lg border border-border bg-white px-2 py-1.5 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+                              />
+                              {isSaving ? (
+                                <Loader2
+                                  className="h-3.5 w-3.5 shrink-0 animate-spin text-accent"
+                                  aria-label="Guardando"
+                                />
+                              ) : null}
+                            </div>
+                            {saveError ? (
+                              <p className="mt-1 text-[10px] text-red-600">
+                                {saveError}
+                              </p>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {!inversaLoading ? (
+              <div className="border-t border-border bg-slate-50/80 px-4 py-2.5 text-xs text-muted">
+                {filteredInversa.length} de {inversaItems.length} registro
+                {inversaItems.length === 1 ? "" : "s"}
               </div>
             ) : null}
           </div>
