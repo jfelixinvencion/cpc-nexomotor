@@ -8,33 +8,21 @@ const LIST_URL =
 const DETAIL_URL_BASE =
   "https://dms-api.sigma-peru.com/api/after-sale/work-order-spare/work-order";
 
+/** Fixed range for this debug pass (do not switch to rolling 30 days yet). */
+const ENTRY_DATE_START = "2026-07-11";
+const ENTRY_DATE_END = "2026-08-10";
 const PER_PAGE = 100;
-const LOOKBACK_DAYS = 30;
+const LIST_PAGE = 1;
 const DETAIL_CONCURRENCY = 4;
 const INSERT_BATCH = 100;
 
 type SigmaWorkOrderListItem = {
-  id?: number;
+  id?: string | number | null;
+  work_order_number?: string | number | null;
+  number?: string | number | null;
+  operation_type?: string | null;
+  created_at?: string | null;
   [key: string]: unknown;
-};
-
-type ListPageResponse = {
-  code?: number;
-  message?: string;
-  data?: {
-    work_orders?: SigmaWorkOrderListItem[];
-    pagination?: {
-      total?: number;
-      per_page?: number;
-      current_page?: number;
-      last_page?: number;
-    };
-  };
-  work_orders?: SigmaWorkOrderListItem[];
-  pagination?: {
-    last_page?: number;
-    current_page?: number;
-  };
 };
 
 type SigmaSpare = {
@@ -46,17 +34,19 @@ type SigmaSpare = {
 };
 
 type SpareDetailPayload = {
-  id?: number;
+  id?: string | number | null;
   work_order_number?: string | number | null;
+  number?: string | number | null;
   plate?: string | null;
   client_name?: string | null;
-  spares?: SigmaSpare[];
+  spares?: SigmaSpare[] | null;
+  services?: unknown;
   [key: string]: unknown;
 };
 
 type LogisticaInversaRow = {
   ot_id: number;
-  ot_numero: string | null;
+  ot_numero: string;
   placa: string | null;
   cliente_nombre: string | null;
   linea_codigo: string;
@@ -68,15 +58,24 @@ type LogisticaInversaRow = {
 
 type DetailError = { id: number; error: string };
 
+type ListDiagnostics = {
+  report_status: number | null;
+  top_level_keys: string[];
+  data_typeof: string;
+  detected_count_before_id_filter: number;
+  sample_first_3: unknown[];
+  entry_date_range: { start: string; end: string };
+  request_body: Record<string, unknown>;
+  request_method: "POST";
+  x_tenant_id: string;
+  list_path_used: string | null;
+};
+
 function isAuthorizedSyncRequest(request: NextRequest): boolean {
   const expected = process.env.SYNC_TRIGGER_SECRET;
   if (!expected) return false;
   const provided = request.headers.get("x-sync-secret");
   return provided === expected;
-}
-
-function isSigmaAuthError(err: unknown): boolean {
-  return err instanceof Error && /Sigma error (401|403):/.test(err.message);
 }
 
 function requireTenantId(): string {
@@ -87,18 +86,288 @@ function requireTenantId(): string {
   return tenantId;
 }
 
-function dateOnlyDaysAgo(days: number, now = new Date()): string {
-  const d = new Date(now);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - days);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function buildListRequestBody(): Record<string, unknown> {
+  return {
+    advisor_ids: null,
+    brand_id: null,
+    car_plate: null,
+    car_vin: null,
+    client_query: null,
+    close_date_range: null,
+    delivery_date_range: {
+      start: null,
+      end: null,
+    },
+    entry_date_range: {
+      start: ENTRY_DATE_START,
+      end: ENTRY_DATE_END,
+    },
+    insurer_id: null,
+    invoice_date_range: null,
+    is_quote: 0,
+    page: LIST_PAGE,
+    per_page: PER_PAGE,
+    sort_by: null,
+    sort_direction: null,
+    spare: null,
+    store_ids: null,
+    type: null,
+    vehicle_model_id: null,
+    voucher_query: null,
+    work_order_general_statuses: null,
+    work_order_number: null,
+    work_order_type_operations: [2],
+  };
 }
 
-function dateOnlyToday(now = new Date()): string {
-  return dateOnlyDaysAgo(0, now);
+function topLevelKeys(value: unknown): string[] {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  return Object.keys(value as Record<string, unknown>);
+}
+
+function describeDataType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `array(len=${value.length})`;
+  return typeof value;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ? `${error.message}\n${error.stack}` : error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/** Accept string or number ids (e.g. "764" or 764). */
+function parseOtId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return null;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (value == null) return null;
+  const s = String(value).trim();
+  return s === "" ? null : s;
+}
+
+function looksLikeWorkOrderItem(item: unknown): boolean {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  const obj = item as Record<string, unknown>;
+  return (
+    obj.id != null ||
+    obj.work_order_number != null ||
+    obj.operation_type != null
+  );
+}
+
+/**
+ * If Sigma nests JSON as a string under `data`, parse it once.
+ */
+function coercePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const root = { ...(payload as Record<string, unknown>) };
+  if (typeof root.data === "string") {
+    const raw = root.data.trim();
+    if (!raw) {
+      root.data = null;
+      return root;
+    }
+    try {
+      root.data = JSON.parse(raw);
+      console.log(
+        "[sync-inversa] report-api data was string; JSON.parse OK. typeof after:",
+        describeDataType(root.data)
+      );
+    } catch (err) {
+      console.error(
+        "[sync-inversa] report-api data string JSON.parse failed:",
+        errorMessage(err)
+      );
+    }
+  }
+
+  // One more nested string level: data.data as string
+  if (
+    root.data &&
+    typeof root.data === "object" &&
+    !Array.isArray(root.data) &&
+    typeof (root.data as Record<string, unknown>).data === "string"
+  ) {
+    const nested = root.data as Record<string, unknown>;
+    const raw = String(nested.data).trim();
+    if (raw) {
+      try {
+        nested.data = JSON.parse(raw);
+        console.log(
+          "[sync-inversa] report-api data.data was string; JSON.parse OK"
+        );
+      } catch (err) {
+        console.error(
+          "[sync-inversa] report-api data.data JSON.parse failed:",
+          errorMessage(err)
+        );
+      }
+    }
+  }
+
+  return root;
+}
+
+/**
+ * Inspect the real payload without assuming a fixed shape.
+ */
+function extractWorkOrderList(payload: unknown): {
+  list: SigmaWorkOrderListItem[];
+  path: string | null;
+} {
+  if (Array.isArray(payload)) {
+    return {
+      list: payload as SigmaWorkOrderListItem[],
+      path: "response",
+    };
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return { list: [], path: null };
+  }
+
+  const root = payload as Record<string, unknown>;
+
+  const candidates: Array<{ path: string; value: unknown }> = [
+    { path: "response.data", value: root.data },
+    {
+      path: "response.data.data",
+      value:
+        root.data && typeof root.data === "object" && !Array.isArray(root.data)
+          ? (root.data as Record<string, unknown>).data
+          : undefined,
+    },
+    {
+      path: "response.data.data.data",
+      value: (() => {
+        if (!root.data || typeof root.data !== "object" || Array.isArray(root.data)) {
+          return undefined;
+        }
+        const d1 = (root.data as Record<string, unknown>).data;
+        if (!d1 || typeof d1 !== "object" || Array.isArray(d1)) return undefined;
+        return (d1 as Record<string, unknown>).data;
+      })(),
+    },
+    {
+      path: "response.data.work_orders",
+      value:
+        root.data && typeof root.data === "object" && !Array.isArray(root.data)
+          ? (root.data as Record<string, unknown>).work_orders
+          : undefined,
+    },
+    {
+      path: "response.data.data.work_orders",
+      value: (() => {
+        if (!root.data || typeof root.data !== "object" || Array.isArray(root.data)) {
+          return undefined;
+        }
+        const d1 = (root.data as Record<string, unknown>).data;
+        if (!d1 || typeof d1 !== "object" || Array.isArray(d1)) return undefined;
+        return (d1 as Record<string, unknown>).work_orders;
+      })(),
+    },
+    { path: "response.work_orders", value: root.work_orders },
+    {
+      path: "response.data.items",
+      value:
+        root.data && typeof root.data === "object" && !Array.isArray(root.data)
+          ? (root.data as Record<string, unknown>).items
+          : undefined,
+    },
+    {
+      path: "response.data.rows",
+      value:
+        root.data && typeof root.data === "object" && !Array.isArray(root.data)
+          ? (root.data as Record<string, unknown>).rows
+          : undefined,
+    },
+    {
+      path: "response.data.results",
+      value:
+        root.data && typeof root.data === "object" && !Array.isArray(root.data)
+          ? (root.data as Record<string, unknown>).results
+          : undefined,
+    },
+  ];
+
+  let emptyFallback: { list: SigmaWorkOrderListItem[]; path: string } | null =
+    null;
+
+  for (const c of candidates) {
+    if (!Array.isArray(c.value)) continue;
+    if (c.value.length === 0) {
+      if (!emptyFallback) {
+        emptyFallback = { list: [], path: c.path };
+      }
+      continue;
+    }
+    if (looksLikeWorkOrderItem(c.value[0])) {
+      return {
+        list: c.value as SigmaWorkOrderListItem[],
+        path: c.path,
+      };
+    }
+  }
+
+  for (const [key, value] of Object.entries(root)) {
+    if (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      looksLikeWorkOrderItem(value[0])
+    ) {
+      return { list: value as SigmaWorkOrderListItem[], path: `response.${key}` };
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [k2, v2] of Object.entries(value as Record<string, unknown>)) {
+        if (
+          Array.isArray(v2) &&
+          v2.length > 0 &&
+          looksLikeWorkOrderItem(v2[0])
+        ) {
+          return {
+            list: v2 as SigmaWorkOrderListItem[],
+            path: `response.${key}.${k2}`,
+          };
+        }
+      }
+    }
+  }
+
+  if (emptyFallback) return emptyFallback;
+  return { list: [], path: null };
+}
+
+function sanitizeSampleItem(
+  item: SigmaWorkOrderListItem
+): Record<string, unknown> {
+  return {
+    id: item.id ?? null,
+    work_order_number: item.work_order_number ?? item.number ?? null,
+    operation_type: item.operation_type ?? null,
+    created_at: item.created_at ?? null,
+  };
 }
 
 function hasDeliveryDate(value: unknown): value is string {
@@ -107,28 +376,27 @@ function hasDeliveryDate(value: unknown): value is string {
   return s.length > 0;
 }
 
-function extractWorkOrders(payload: ListPageResponse): SigmaWorkOrderListItem[] {
-  if (Array.isArray(payload.data?.work_orders)) {
-    return payload.data.work_orders;
-  }
-  if (Array.isArray(payload.work_orders)) {
-    return payload.work_orders;
-  }
-  return [];
-}
-
-function extractLastPage(payload: ListPageResponse, fallback: number): number {
-  return (
-    payload.data?.pagination?.last_page ??
-    payload.pagination?.last_page ??
-    fallback
-  );
-}
-
 function extractDetailData(json: unknown): SpareDetailPayload | null {
+  if (typeof json === "string") {
+    try {
+      json = JSON.parse(json);
+    } catch {
+      return null;
+    }
+  }
   if (!json || typeof json !== "object") return null;
+
   const root = json as Record<string, unknown>;
-  const nested = root.data;
+  let nested: unknown = root.data;
+
+  if (typeof nested === "string") {
+    try {
+      nested = JSON.parse(nested);
+    } catch {
+      nested = null;
+    }
+  }
+
   if (nested && typeof nested === "object") {
     const dataObj = nested as Record<string, unknown>;
     if (Array.isArray(dataObj.spares) || dataObj.id != null) {
@@ -145,34 +413,86 @@ function extractDetailData(json: unknown): SpareDetailPayload | null {
   return null;
 }
 
-async function fetchWorkOrderListPage(
-  token: string,
-  page: number,
-  start: string,
-  end: string
-): Promise<ListPageResponse> {
+type ListFetchResult =
+  | {
+      ok: true;
+      status: number;
+      json: unknown;
+      rawText: string;
+      body: Record<string, unknown>;
+      tenantId: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      responseText: string;
+      body: Record<string, unknown>;
+      tenantId: string;
+    };
+
+async function fetchWorkOrderListPage(token: string): Promise<ListFetchResult> {
+  const body = buildListRequestBody();
+  const tenantId = requireTenantId();
+
   const res = await fetch(LIST_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
-      "x-tenant-id": requireTenantId(),
       Accept: "application/json",
       "Content-Type": "application/json",
+      "x-tenant-id": tenantId,
+      Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
-      work_order_type_operations: [2],
-      entry_date_range: { start, end },
-      is_quote: 0,
-      per_page: PER_PAGE,
-      page,
-    }),
+    body: JSON.stringify(body),
   });
 
+  const responseText = await res.text();
+
+  console.log("[sync-inversa] report-api HTTP status:", res.status);
+  console.log(
+    "[sync-inversa] report-api raw response (truncated):",
+    responseText.slice(0, 4000)
+  );
+
   if (!res.ok) {
-    throw new Error(`Sigma error ${res.status}: ${await res.text()}`);
+    return {
+      ok: false,
+      status: res.status,
+      responseText,
+      body,
+      tenantId,
+    };
   }
 
-  return (await res.json()) as ListPageResponse;
+  let json: unknown = null;
+  try {
+    json = responseText ? JSON.parse(responseText) : null;
+  } catch (err) {
+    console.error(
+      "[sync-inversa] report-api JSON.parse failed:",
+      errorMessage(err)
+    );
+    return {
+      ok: false,
+      status: res.status,
+      responseText,
+      body,
+      tenantId,
+    };
+  }
+
+  console.log(
+    "[sync-inversa] report-api parsed top-level keys:",
+    topLevelKeys(json)
+  );
+
+  return {
+    ok: true,
+    status: res.status,
+    json,
+    rawText: responseText,
+    body,
+    tenantId,
+  };
 }
 
 async function fetchSpareDetail(
@@ -207,42 +527,59 @@ async function fetchSpareDetail(
   return extractDetailData(json);
 }
 
-function rowsFromDetail(detail: SpareDetailPayload): LogisticaInversaRow[] {
-  if (typeof detail.id !== "number" || !Number.isFinite(detail.id)) {
+function resolveOtNumero(
+  detail: SpareDetailPayload,
+  fallbackFromList: string | null
+): string | null {
+  return (
+    asNonEmptyString(detail.work_order_number) ??
+    asNonEmptyString(detail.number) ??
+    fallbackFromList
+  );
+}
+
+/**
+ * Map detail → rows. If `spares` is missing/empty, returns [] (skip OT).
+ * Never throws on missing spares/services.
+ */
+function rowsFromDetail(
+  detail: SpareDetailPayload | null | undefined,
+  fallbackOtNumero: string | null
+): LogisticaInversaRow[] {
+  if (!detail) return [];
+
+  const otId = parseOtId(detail.id);
+  if (otId == null) return [];
+
+  if (!Array.isArray(detail.spares) || detail.spares.length === 0) {
     return [];
   }
 
-  const spares = Array.isArray(detail.spares) ? detail.spares : [];
+  const otNumero = resolveOtNumero(detail, fallbackOtNumero);
+  // ot_numero is NOT NULL in Supabase — skip rows we cannot populate.
+  if (!otNumero) {
+    console.warn(
+      `[sync-inversa] skipping OT id=${otId}: ot_numero is null/empty`
+    );
+    return [];
+  }
+
   const rows: LogisticaInversaRow[] = [];
 
-  for (const spare of spares) {
+  for (const spare of detail.spares) {
+    if (!spare || typeof spare !== "object") continue;
     if (!hasDeliveryDate(spare.delivery_date)) continue;
 
-    const codigo =
-      spare.code != null && String(spare.code).trim() !== ""
-        ? String(spare.code).trim()
-        : null;
+    const codigo = asNonEmptyString(spare.code);
     if (!codigo) continue;
 
     rows.push({
-      ot_id: detail.id,
-      ot_numero:
-        detail.work_order_number != null && detail.work_order_number !== ""
-          ? String(detail.work_order_number)
-          : null,
-      placa:
-        detail.plate != null && String(detail.plate).trim() !== ""
-          ? String(detail.plate)
-          : null,
-      cliente_nombre:
-        detail.client_name != null && String(detail.client_name).trim() !== ""
-          ? String(detail.client_name)
-          : null,
+      ot_id: otId,
+      ot_numero: otNumero,
+      placa: asNonEmptyString(detail.plate),
+      cliente_nombre: asNonEmptyString(detail.client_name),
       linea_codigo: codigo,
-      linea_descripcion:
-        spare.description != null && String(spare.description).trim() !== ""
-          ? String(spare.description)
-          : null,
+      linea_descripcion: asNonEmptyString(spare.description),
       linea_cantidad:
         typeof spare.quantity === "number" && Number.isFinite(spare.quantity)
           ? spare.quantity
@@ -260,18 +597,27 @@ function rowsFromDetail(detail: SpareDetailPayload): LogisticaInversaRow[] {
 async function insertIgnoreDuplicates(
   rows: LogisticaInversaRow[]
 ): Promise<number> {
-  if (rows.length === 0) return 0;
+  // Extra safety: never send null ot_numero (NOT NULL constraint).
+  const valid = rows.filter(
+    (r) =>
+      r.ot_numero != null &&
+      String(r.ot_numero).trim() !== "" &&
+      r.linea_codigo != null &&
+      r.linea_fecha_entrega != null
+  );
+
+  if (valid.length === 0) return 0;
 
   let attempted = 0;
-  for (let i = 0; i < rows.length; i += INSERT_BATCH) {
-    const batch = rows.slice(i, i + INSERT_BATCH);
+  for (let i = 0; i < valid.length; i += INSERT_BATCH) {
+    const batch = valid.slice(i, i + INSERT_BATCH);
     const { error } = await supabaseAdmin.from("logistica_inversa").upsert(batch, {
       onConflict: "ot_id,linea_codigo,linea_fecha_entrega",
       ignoreDuplicates: true,
     });
 
     if (error) {
-      throw new Error(error.message);
+      throw new Error(`Supabase upsert: ${error.message}`);
     }
 
     attempted += batch.length;
@@ -280,89 +626,177 @@ async function insertIgnoreDuplicates(
   return attempted;
 }
 
-async function listWorkOrderIds(
-  tokenRef: { token: string },
-  start: string,
-  end: string,
-  errors: DetailError[]
-): Promise<number[]> {
-  const ids: number[] = [];
-  let page = 1;
+function emptyDiagnostics(
+  partial?: Partial<ListDiagnostics>
+): ListDiagnostics {
+  return {
+    report_status: null,
+    top_level_keys: [],
+    data_typeof: "undefined",
+    detected_count_before_id_filter: 0,
+    sample_first_3: [],
+    entry_date_range: { start: ENTRY_DATE_START, end: ENTRY_DATE_END },
+    request_body: buildListRequestBody(),
+    request_method: "POST",
+    x_tenant_id: process.env.SIGMA_TENANT_ID ?? "(missing)",
+    list_path_used: null,
+    ...partial,
+  };
+}
 
-  for (;;) {
-    let payload: ListPageResponse;
-    try {
-      try {
-        payload = await fetchWorkOrderListPage(
-          tokenRef.token,
-          page,
-          start,
-          end
-        );
-      } catch (err) {
-        if (isSigmaAuthError(err)) {
-          tokenRef.token = await sigmaLogin();
-          payload = await fetchWorkOrderListPage(
-            tokenRef.token,
-            page,
-            start,
-            end
-          );
-        } else {
-          throw err;
-        }
-      }
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Error desconocido en listado";
-      console.error(`[sync-inversa] list page ${page}:`, message);
-      errors.push({ id: -1, error: `list page ${page}: ${message}` });
-      break;
-    }
-
-    const list = extractWorkOrders(payload);
-    const lastPage = extractLastPage(payload, page);
-
-    for (const wo of list) {
-      if (typeof wo.id === "number" && Number.isFinite(wo.id)) {
-        ids.push(wo.id);
-      }
-    }
-
-    if (list.length === 0 || page >= lastPage) break;
-    page += 1;
-  }
-
-  return Array.from(new Set(ids));
+function failureJson(
+  entry_date_range: { start: string; end: string },
+  error: unknown,
+  diagnostics?: ListDiagnostics
+) {
+  const message = errorMessage(error);
+  console.error("[sync-inversa] error:", message);
+  return NextResponse.json(
+    {
+      success: false,
+      entry_date_range,
+      total_listed: 0,
+      total_details_fetched: 0,
+      spares_with_delivery: 0,
+      inserted_attempted: 0,
+      diagnostics: diagnostics ?? emptyDiagnostics(),
+      errors: [{ id: -1, error: message }],
+      error: message,
+    },
+    { status: 500 }
+  );
 }
 
 export async function POST(request: NextRequest) {
-  if (!isAuthorizedSyncRequest(request)) {
-    return NextResponse.json(
-      { success: false, error: "Unauthorized" },
-      { status: 401 }
-    );
-  }
-
-  const errors: DetailError[] = [];
-  const end = dateOnlyToday();
-  const start = dateOnlyDaysAgo(LOOKBACK_DAYS);
+  const entry_date_range = { start: ENTRY_DATE_START, end: ENTRY_DATE_END };
 
   try {
+    if (!isAuthorizedSyncRequest(request)) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const errors: DetailError[] = [];
+
+    // Same token flow as Control OT (/api/sync-work-orders)
     let token = await getStoredToken();
     if (!token) {
       token = await sigmaLogin();
     }
 
-    const tokenRef = { token };
-    const ids = await listWorkOrderIds(tokenRef, start, end, errors);
+    let listResult = await fetchWorkOrderListPage(token);
+    if (
+      !listResult.ok &&
+      (listResult.status === 401 || listResult.status === 403)
+    ) {
+      token = await sigmaLogin();
+      listResult = await fetchWorkOrderListPage(token);
+    }
 
+    if (!listResult.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          entry_date_range,
+          total_listed: 0,
+          total_details_fetched: 0,
+          spares_with_delivery: 0,
+          inserted_attempted: 0,
+          report_status: listResult.status,
+          report_response_body: listResult.responseText.slice(0, 4000),
+          error: `report-api HTTP ${listResult.status}`,
+          diagnostics: emptyDiagnostics({
+            report_status: listResult.status,
+            request_body: listResult.body,
+            x_tenant_id: listResult.tenantId,
+          }),
+          errors: [
+            {
+              id: -1,
+              error: `report-api HTTP ${listResult.status}`,
+            },
+          ],
+        },
+        { status: 200 }
+      );
+    }
+
+    const payload = coercePayload(listResult.json);
+    const rootData =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).data
+        : undefined;
+
+    const { list, path } = extractWorkOrderList(payload);
+
+    console.log("[sync-inversa] list path:", path);
+    console.log("[sync-inversa] list length:", list.length);
+    console.log(
+      "[sync-inversa] list sample:",
+      JSON.stringify(list.slice(0, 3).map(sanitizeSampleItem))
+    );
+
+    const otNumeroById = new Map<number, string>();
+    const ids: number[] = [];
+    for (const wo of list) {
+      const id = parseOtId(wo.id);
+      if (id == null) continue;
+      ids.push(id);
+      const otNum =
+        asNonEmptyString(wo.work_order_number) ?? asNonEmptyString(wo.number);
+      if (otNum) otNumeroById.set(id, otNum);
+    }
+    const uniqueIds = Array.from(new Set(ids));
+
+    const diagnostics: ListDiagnostics = {
+      report_status: listResult.status,
+      top_level_keys: topLevelKeys(payload),
+      data_typeof: describeDataType(rootData),
+      detected_count_before_id_filter: list.length,
+      sample_first_3: list.slice(0, 3).map(sanitizeSampleItem),
+      entry_date_range,
+      request_body: listResult.body,
+      request_method: "POST",
+      x_tenant_id: listResult.tenantId,
+      list_path_used: path,
+    };
+
+    if (uniqueIds.length === 0) {
+      return NextResponse.json({
+        success: false,
+        entry_date_range,
+        total_listed: 0,
+        total_details_fetched: 0,
+        spares_with_delivery: 0,
+        inserted_attempted: 0,
+        diagnostics,
+        errors: [
+          {
+            id: -1,
+            error:
+              list.length === 0
+                ? "Listado vacío o estructura de respuesta no reconocida"
+                : "Se detectaron filas pero ningún id parseable",
+          },
+        ],
+        error:
+          list.length === 0
+            ? "Listado vacío o estructura de respuesta no reconocida"
+            : "Se detectaron filas pero ningún id parseable",
+      });
+    }
+
+    const tokenRef = { token };
     const collected: LogisticaInversaRow[] = [];
     let detailsFetched = 0;
     let sparesWithDelivery = 0;
+    let skippedNoSpares = 0;
+    let skippedNoOtNumero = 0;
 
-    for (let i = 0; i < ids.length; i += DETAIL_CONCURRENCY) {
-      const chunk = ids.slice(i, i + DETAIL_CONCURRENCY);
+    for (let i = 0; i < uniqueIds.length; i += DETAIL_CONCURRENCY) {
+      const chunk = uniqueIds.slice(i, i + DETAIL_CONCURRENCY);
       const results = await Promise.all(
         chunk.map((id) =>
           fetchSpareDetail(tokenRef, id).then(
@@ -379,46 +813,79 @@ export async function POST(request: NextRequest) {
       for (const r of results) {
         if (!r.detail) {
           const errMsg =
-            "error" in r && r.error ? r.error : "fetch failed";
+            "error" in r && r.error ? r.error : "fetch failed / sin detalle";
+          // Missing detail or missing spares should not abort the whole sync.
+          if (!("error" in r) || !r.error) {
+            skippedNoSpares += 1;
+            continue;
+          }
           console.error(`[sync-inversa] detail ${r.id}:`, errMsg);
           errors.push({ id: r.id, error: errMsg });
           continue;
         }
 
+        if (!Array.isArray(r.detail.spares) || r.detail.spares.length === 0) {
+          skippedNoSpares += 1;
+          continue;
+        }
+
         detailsFetched += 1;
-        const rows = rowsFromDetail(r.detail);
+        const before = collected.length;
+        const rows = rowsFromDetail(
+          r.detail,
+          otNumeroById.get(r.id) ?? null
+        );
+        if (
+          rows.length === 0 &&
+          Array.isArray(r.detail.spares) &&
+          r.detail.spares.length > 0 &&
+          !resolveOtNumero(r.detail, otNumeroById.get(r.id) ?? null)
+        ) {
+          skippedNoOtNumero += 1;
+        }
         sparesWithDelivery += rows.length;
         collected.push(...rows);
+        void before;
       }
     }
 
-    const insertedAttempted = await insertIgnoreDuplicates(collected);
+    let insertedAttempted = 0;
+    try {
+      insertedAttempted = await insertIgnoreDuplicates(collected);
+    } catch (insertErr) {
+      const message = errorMessage(insertErr);
+      console.error("[sync-inversa] insert failed:", message);
+      return NextResponse.json(
+        {
+          success: false,
+          entry_date_range,
+          total_listed: uniqueIds.length,
+          total_details_fetched: detailsFetched,
+          spares_with_delivery: sparesWithDelivery,
+          inserted_attempted: 0,
+          skipped_no_spares: skippedNoSpares,
+          skipped_no_ot_numero: skippedNoOtNumero,
+          diagnostics,
+          errors: [...errors, { id: -1, error: message }],
+          error: message,
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: errors.length === 0,
-      entry_date_range: { start, end },
-      total_listed: ids.length,
+      entry_date_range,
+      total_listed: uniqueIds.length,
       total_details_fetched: detailsFetched,
       spares_with_delivery: sparesWithDelivery,
       inserted_attempted: insertedAttempted,
+      skipped_no_spares: skippedNoSpares,
+      skipped_no_ot_numero: skippedNoOtNumero,
+      diagnostics,
       errors,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Error desconocido";
-    console.error("[sync-inversa] error:", message);
-    return NextResponse.json(
-      {
-        success: false,
-        entry_date_range: { start, end },
-        total_listed: 0,
-        total_details_fetched: 0,
-        spares_with_delivery: 0,
-        inserted_attempted: 0,
-        errors: [{ id: -1, error: message }],
-        error: message,
-      },
-      { status: 500 }
-    );
+    return failureJson(entry_date_range, error);
   }
 }
