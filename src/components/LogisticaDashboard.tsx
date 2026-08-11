@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   ClipboardList,
+  FileSpreadsheet,
   Loader2,
   Lock,
   Pencil,
@@ -13,6 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 
 const INVERSA_PAGE_SIZE = 200;
@@ -133,6 +135,16 @@ function formatFechaEntrega(value: string | null | undefined) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
+}
+
+function excelFecha(value: string | null | undefined) {
+  const formatted = formatFechaEntrega(value);
+  return formatted === "-" ? "" : formatted;
+}
+
+function todayYmdLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 function pad2(n: number) {
@@ -656,6 +668,34 @@ export default function LogisticaDashboard() {
     } finally {
       setInversaSyncing(false);
     }
+  }
+
+  function handleExportInversaExcel() {
+    const rows = filteredInversa.map((item) => ({
+      "Fecha Ent. Rep. Nuevo": excelFecha(item.linea_fecha_entrega),
+      Cliente: asText(item.cliente_nombre),
+      OT: asText(item.ot_numero),
+      Placa: asText(item.placa),
+      Código: asText(item.linea_codigo),
+      Descripción: asText(item.linea_descripcion),
+      "Cant.":
+        item.linea_cantidad == null || item.linea_cantidad === ""
+          ? ""
+          : formatCantidad(item.linea_cantidad),
+      "Fecha Ent. Rep. Viejo": excelFecha(item.fecha_registro_retorno),
+      "Resp. Entrega": asText(item.responsable_entrega),
+      "Estado Repuesto": asText(item.estado_repuesto),
+      Observaciones: asText(item.observaciones),
+      Certificado: item.certificado_at ? "SÍ" : "NO",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Logística Inversa");
+    XLSX.writeFile(
+      workbook,
+      `Reporte_Logistica_Inversa_${todayYmdLocal()}.xlsx`
+    );
   }
 
   function startEditInversa(item: LogisticaInversaRow) {
@@ -1286,6 +1326,18 @@ export default function LogisticaDashboard() {
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+              <button
+                type="button"
+                onClick={handleExportInversaExcel}
+                disabled={filteredInversa.length === 0}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FileSpreadsheet
+                  className="h-3.5 w-3.5 text-emerald-600"
+                  aria-hidden
+                />
+                Exportar Excel
+              </button>
               <button
                 type="button"
                 onClick={() => void handleSyncInversa()}
