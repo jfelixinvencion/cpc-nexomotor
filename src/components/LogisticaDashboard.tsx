@@ -1,15 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  Check,
   CheckCircle2,
   ClipboardList,
   FileSpreadsheet,
   Loader2,
   Lock,
   Pencil,
+  Plus,
+  Recycle,
   RotateCcw,
   Trash2,
   X,
@@ -19,7 +27,10 @@ import { supabase } from "@/lib/supabase/client";
 
 const INVERSA_PAGE_SIZE = 200;
 const INVERSA_ROW_HEIGHT = 48;
-const INVERSA_EDIT_ROW_HEIGHT = 200;
+const ICON_BTN =
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border p-1 transition disabled:cursor-not-allowed disabled:opacity-60";
+const MODAL_INPUT_CLASS =
+  "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
 
 export type DetalleOtPendiente = {
   ot_numero: string | number | null;
@@ -51,6 +62,20 @@ export type LogisticaInversaRow = {
   observaciones: string | null;
   fecha_registro_retorno: string | null;
   certificado_at: string | null;
+  vendido_chatarrero_at: string | null;
+};
+
+export type LogisticaInversaPendienteRow = {
+  id: string;
+  ot_numero: string | number | null;
+  placa: string | null;
+  linea_codigo: string | null;
+  linea_descripcion: string | null;
+  linea_cantidad: number | string | null;
+  created_at: string | null;
+  responsable_recepcion: string | null;
+  estado_repuesto: string | null;
+  observaciones: string | null;
 };
 
 type PlanillaPersona = {
@@ -67,7 +92,19 @@ type InversaEditForm = {
   observaciones: string;
 };
 
+type PendienteForm = {
+  ot_numero: string;
+  placa: string;
+  linea_codigo: string;
+  linea_descripcion: string;
+  linea_cantidad: string;
+  responsable_recepcion: string;
+  estado_repuesto: string;
+  observaciones: string;
+};
+
 type LogisticaTab = "control-ot" | "inversa";
+type InversaSubTab = "historial" | "pendientes";
 
 const OT_STATUS_LABELS: Record<string, string> = {
   WAITING_FOR_ASSIGNMENT: "Espera asignación",
@@ -151,22 +188,21 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
-/** Local datetime-local value from a Date (browser local TZ). */
-function toDatetimeLocalValue(date = new Date()): string {
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-}
-
-function isoToDatetimeLocal(value: string | null | undefined): string {
-  if (!value) return toDatetimeLocalValue();
+function isoToDateInput(value: string | null | undefined): string {
+  if (!value) return todayYmdLocal();
+  const m = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return toDatetimeLocalValue();
-  return toDatetimeLocalValue(d);
+  if (Number.isNaN(d.getTime())) return todayYmdLocal();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-function datetimeLocalToIso(value: string): string | null {
+function dateInputToIso(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const d = new Date(trimmed);
+  const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
 }
@@ -280,6 +316,27 @@ function mapInversaRow(row: Record<string, unknown>): LogisticaInversaRow {
     observaciones: asText(row.observaciones) || null,
     fecha_registro_retorno: asText(row.fecha_registro_retorno) || null,
     certificado_at: asText(row.certificado_at) || null,
+    vendido_chatarrero_at: asText(row.vendido_chatarrero_at) || null,
+  };
+}
+
+function mapPendienteRow(
+  row: Record<string, unknown>
+): LogisticaInversaPendienteRow {
+  return {
+    id: String(row.id ?? ""),
+    ot_numero: (row.ot_numero as string | number | null) ?? null,
+    placa: asText(row.placa) || null,
+    linea_codigo: asText(row.linea_codigo) || null,
+    linea_descripcion: asText(row.linea_descripcion) || null,
+    linea_cantidad:
+      row.linea_cantidad == null
+        ? null
+        : (row.linea_cantidad as number | string),
+    created_at: asText(row.created_at) || null,
+    responsable_recepcion: asText(row.responsable_recepcion) || null,
+    estado_repuesto: asText(row.estado_repuesto) || null,
+    observaciones: asText(row.observaciones) || null,
   };
 }
 
@@ -313,10 +370,56 @@ function sortOtNumeros(values: string[]) {
 
 function emptyInversaEditForm(): InversaEditForm {
   return {
-    fecha_registro_retorno: toDatetimeLocalValue(),
+    fecha_registro_retorno: todayYmdLocal(),
     responsable_entrega: "",
     estado_repuesto: "",
     observaciones: "",
+  };
+}
+
+function emptyPendienteForm(): PendienteForm {
+  return {
+    ot_numero: "",
+    placa: "",
+    linea_codigo: "",
+    linea_descripcion: "",
+    linea_cantidad: "1",
+    responsable_recepcion: "",
+    estado_repuesto: "",
+    observaciones: "",
+  };
+}
+
+function pendienteToForm(item: LogisticaInversaPendienteRow): PendienteForm {
+  return {
+    ot_numero: item.ot_numero != null ? String(item.ot_numero) : "",
+    placa: item.placa ?? "",
+    linea_codigo: item.linea_codigo ?? "",
+    linea_descripcion: item.linea_descripcion ?? "",
+    linea_cantidad:
+      item.linea_cantidad == null || item.linea_cantidad === ""
+        ? "1"
+        : String(item.linea_cantidad),
+    responsable_recepcion: item.responsable_recepcion ?? "",
+    estado_repuesto: item.estado_repuesto ?? "",
+    observaciones: item.observaciones ?? "",
+  };
+}
+
+function pendienteFormPayload(form: PendienteForm) {
+  const codigo = form.linea_codigo.trim();
+  const descripcion = form.linea_descripcion.trim();
+  const qtyRaw = form.linea_cantidad.trim();
+  const qty = qtyRaw === "" ? 1 : Number(qtyRaw);
+  return {
+    ot_numero: form.ot_numero.trim() || null,
+    placa: form.placa.trim() || null,
+    linea_codigo: codigo,
+    linea_descripcion: descripcion,
+    linea_cantidad: Number.isFinite(qty) ? qty : 1,
+    responsable_recepcion: form.responsable_recepcion.trim() || null,
+    estado_repuesto: form.estado_repuesto.trim() || null,
+    observaciones: form.observaciones.trim() || null,
   };
 }
 
@@ -345,6 +448,7 @@ export default function LogisticaDashboard() {
   const [inversaHasMore, setInversaHasMore] = useState(true);
   const [inversaError, setInversaError] = useState<string | null>(null);
   const [inversaFilterTexto, setInversaFilterTexto] = useState("");
+  const [inversaSubTab, setInversaSubTab] = useState<InversaSubTab>("historial");
   const [hideCompletados, setHideCompletados] = useState(false);
   const [inversaSyncing, setInversaSyncing] = useState(false);
   const [inversaSyncMessage, setInversaSyncMessage] = useState<{
@@ -360,7 +464,29 @@ export default function LogisticaDashboard() {
   );
   const [editSaving, setEditSaving] = useState(false);
   const [certifyingId, setCertifyingId] = useState<string | null>(null);
+  const [sellingId, setSellingId] = useState<string | null>(null);
   const [clearingId, setClearingId] = useState<string | null>(null);
+  const [pendientesItems, setPendientesItems] = useState<
+    LogisticaInversaPendienteRow[]
+  >([]);
+  const [pendientesLoading, setPendientesLoading] = useState(false);
+  const [pendientesError, setPendientesError] = useState<string | null>(null);
+  const [pendientesFilterTexto, setPendientesFilterTexto] = useState("");
+  const [addingPendiente, setAddingPendiente] = useState(false);
+  const [addPendienteForm, setAddPendienteForm] = useState<PendienteForm>(
+    emptyPendienteForm
+  );
+  const [addPendienteSaving, setAddPendienteSaving] = useState(false);
+  const [editingPendienteId, setEditingPendienteId] = useState<string | null>(
+    null
+  );
+  const [editPendienteForm, setEditPendienteForm] = useState<PendienteForm>(
+    emptyPendienteForm
+  );
+  const [editPendienteSaving, setEditPendienteSaving] = useState(false);
+  const [deletingPendienteId, setDeletingPendienteId] = useState<string | null>(
+    null
+  );
   const [editError, setEditError] = useState<string | null>(null);
   const [inversaSaveToast, setInversaSaveToast] = useState<string | null>(null);
   const inversaSyncMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(
@@ -495,6 +621,39 @@ export default function LogisticaDashboard() {
     }
   }, [fetchInversaPage, fetchPlanillaOptions]);
 
+  const fetchPendientes = useCallback(async () => {
+    setPendientesLoading(true);
+    setPendientesError(null);
+
+    try {
+      const pendientesRes = await supabase
+        .from("logistica_inversa_pendientes")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (pendientesRes.error) {
+        throw new Error(pendientesRes.error.message);
+      }
+
+      const mapped = (
+        (pendientesRes.data as Record<string, unknown>[] | null) ?? []
+      ).map(mapPendienteRow);
+      setPendientesItems(mapped);
+
+      if (!planillaLoadedRef.current) {
+        await fetchPlanillaOptions();
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Error desconocido";
+      console.error("[logistica-inversa] pendientes fetch:", err);
+      setPendientesError(`Error al cargar pendientes: ${message}`);
+      setPendientesItems([]);
+    } finally {
+      setPendientesLoading(false);
+    }
+  }, [fetchPlanillaOptions]);
+
   const loadMoreInversa = useCallback(async () => {
     if (
       !inversaHasMore ||
@@ -535,6 +694,12 @@ export default function LogisticaDashboard() {
       void fetchInversa();
     }
   }, [tab, fetchInversa]);
+
+  useEffect(() => {
+    if (tab === "inversa" && inversaSubTab === "pendientes") {
+      void fetchPendientes();
+    }
+  }, [tab, inversaSubTab, fetchPendientes]);
 
   useEffect(() => {
     return () => {
@@ -687,6 +852,7 @@ export default function LogisticaDashboard() {
       "Estado Repuesto": asText(item.estado_repuesto),
       Observaciones: asText(item.observaciones),
       Certificado: item.certificado_at ? "SÍ" : "NO",
+      "Vendido Chatarrero": item.vendido_chatarrero_at ? "SÍ" : "NO",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -703,10 +869,9 @@ export default function LogisticaDashboard() {
     setEditError(null);
     setEditingId(String(item.id));
     setEditForm({
-      // Default: now if empty; otherwise existing value.
       fecha_registro_retorno: item.fecha_registro_retorno
-        ? isoToDatetimeLocal(item.fecha_registro_retorno)
-        : toDatetimeLocalValue(),
+        ? isoToDateInput(item.fecha_registro_retorno)
+        : todayYmdLocal(),
       responsable_entrega: item.responsable_entrega ?? "",
       estado_repuesto: item.estado_repuesto ?? "",
       observaciones: item.observaciones ?? "",
@@ -724,7 +889,7 @@ export default function LogisticaDashboard() {
     setEditSaving(true);
     setEditError(null);
 
-    const fechaIso = datetimeLocalToIso(editForm.fecha_registro_retorno);
+    const fechaIso = dateInputToIso(editForm.fecha_registro_retorno);
     if (!fechaIso) {
       setEditError("Fecha de entrega inválida.");
       alert("Fecha de entrega inválida.");
@@ -829,6 +994,63 @@ export default function LogisticaDashboard() {
     await fetchInversa();
   }
 
+  async function handleVenderChatarrero(id: string) {
+    if (sellingId != null) return;
+    const item = inversaItems.find((r) => r.id === id);
+    if (!item?.certificado_at || item.vendido_chatarrero_at) return;
+
+    const ok = window.confirm(
+      "¿Confirma que este repuesto fue vendido al chatarrero? No se puede deshacer."
+    );
+    if (!ok) return;
+
+    setSellingId(id);
+    setEditError(null);
+
+    const vendidoAt = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("logistica_inversa")
+      .update({ vendido_chatarrero_at: vendidoAt })
+      .eq("id", id)
+      .select("id, vendido_chatarrero_at")
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error al marcar vendido:", error);
+      setEditError(`Error al marcar vendido: ${error.message}`);
+      alert("No se pudo registrar la venta al chatarrero.");
+      setSellingId(null);
+      return;
+    }
+
+    if (!data) {
+      console.error(
+        "Error al marcar vendido: update no devolvió fila (¿RLS bloqueó el UPDATE?)",
+        { id }
+      );
+      setEditError(
+        "No se pudo registrar la venta (sin permiso o fila no encontrada)."
+      );
+      alert("No se pudo registrar la venta al chatarrero.");
+      setSellingId(null);
+      return;
+    }
+
+    setInversaItems((prev) =>
+      prev.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              vendido_chatarrero_at:
+                asText(data.vendido_chatarrero_at) || vendidoAt,
+            }
+          : row
+      )
+    );
+    setSellingId(null);
+    showInversaSaveToast("Vendido al chatarrero");
+  }
+
   async function handleLimpiarInversa(id: string) {
     if (clearingId != null) return;
 
@@ -878,6 +1100,130 @@ export default function LogisticaDashboard() {
     setClearingId(null);
     showInversaSaveToast("Limpiado");
     await fetchInversa();
+  }
+
+  function startAddPendiente() {
+    setPendientesError(null);
+    setAddingPendiente(true);
+    setAddPendienteForm(emptyPendienteForm());
+    setEditingPendienteId(null);
+  }
+
+  function cancelAddPendiente() {
+    setAddingPendiente(false);
+    setAddPendienteForm(emptyPendienteForm());
+  }
+
+  function startEditPendiente(item: LogisticaInversaPendienteRow) {
+    setPendientesError(null);
+    setAddingPendiente(false);
+    setEditingPendienteId(item.id);
+    setEditPendienteForm(pendienteToForm(item));
+  }
+
+  function cancelEditPendiente() {
+    setEditingPendienteId(null);
+    setEditPendienteForm(emptyPendienteForm());
+  }
+
+  async function handleSaveNewPendiente() {
+    if (addPendienteSaving) return;
+    const payload = pendienteFormPayload(addPendienteForm);
+    if (!payload.linea_codigo || !payload.linea_descripcion) {
+      setPendientesError("Código y Descripción son obligatorios.");
+      alert("Código y Descripción son obligatorios.");
+      return;
+    }
+
+    setAddPendienteSaving(true);
+    setPendientesError(null);
+
+    const { data, error } = await supabase
+      .from("logistica_inversa_pendientes")
+      .insert(payload)
+      .select("*")
+      .maybeSingle();
+
+    if (error || !data) {
+      const message = error?.message || "No se pudo guardar el pendiente.";
+      console.error("Error al agregar pendiente:", error);
+      setPendientesError(`Error al agregar pendiente: ${message}`);
+      alert("No se pudo guardar el pendiente.");
+      setAddPendienteSaving(false);
+      return;
+    }
+
+    setPendientesItems((prev) => [mapPendienteRow(data), ...prev]);
+    setAddPendienteSaving(false);
+    setAddingPendiente(false);
+    setAddPendienteForm(emptyPendienteForm());
+    showInversaSaveToast("Pendiente agregado");
+  }
+
+  async function handleSavePendienteEdit(id: string) {
+    if (editPendienteSaving) return;
+    const payload = pendienteFormPayload(editPendienteForm);
+    if (!payload.linea_codigo || !payload.linea_descripcion) {
+      setPendientesError("Código y Descripción son obligatorios.");
+      alert("Código y Descripción son obligatorios.");
+      return;
+    }
+
+    setEditPendienteSaving(true);
+    setPendientesError(null);
+
+    const { data, error } = await supabase
+      .from("logistica_inversa_pendientes")
+      .update(payload)
+      .eq("id", id)
+      .select("*")
+      .maybeSingle();
+
+    if (error || !data) {
+      const message = error?.message || "No se pudo guardar el pendiente.";
+      console.error("Error al editar pendiente:", error);
+      setPendientesError(`Error al guardar pendiente: ${message}`);
+      alert("No se pudo guardar el pendiente.");
+      setEditPendienteSaving(false);
+      return;
+    }
+
+    setPendientesItems((prev) =>
+      prev.map((row) => (row.id === id ? mapPendienteRow(data) : row))
+    );
+    setEditPendienteSaving(false);
+    setEditingPendienteId(null);
+    setEditPendienteForm(emptyPendienteForm());
+    showInversaSaveToast("Pendiente guardado");
+  }
+
+  async function handleDeletePendiente(id: string) {
+    if (deletingPendienteId != null) return;
+    const ok = window.confirm("¿Eliminar este pendiente?");
+    if (!ok) return;
+
+    setDeletingPendienteId(id);
+    setPendientesError(null);
+
+    const { error } = await supabase
+      .from("logistica_inversa_pendientes")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      console.error("Error al eliminar pendiente:", error);
+      setPendientesError(`Error al eliminar pendiente: ${error.message}`);
+      alert("No se pudo eliminar el pendiente.");
+      setDeletingPendienteId(null);
+      return;
+    }
+
+    setPendientesItems((prev) => prev.filter((row) => row.id !== id));
+    if (editingPendienteId === id) {
+      cancelEditPendiente();
+    }
+    setDeletingPendienteId(null);
+    showInversaSaveToast("Pendiente eliminado");
   }
 
   const tipoOperacionOptions = useMemo(
@@ -943,8 +1289,12 @@ export default function LogisticaDashboard() {
   ]);
 
   const estadoRepuestoOptions = useMemo(
-    () => uniqueSorted(inversaItems.map((i) => i.estado_repuesto)),
-    [inversaItems]
+    () =>
+      uniqueSorted([
+        ...inversaItems.map((i) => i.estado_repuesto),
+        ...pendientesItems.map((i) => i.estado_repuesto),
+      ]),
+    [inversaItems, pendientesItems]
   );
 
   const filteredInversa = useMemo(() => {
@@ -972,19 +1322,43 @@ export default function LogisticaDashboard() {
     });
   }, [inversaItems, inversaFilterTexto, hideCompletados]);
 
+  const filteredPendientes = useMemo(() => {
+    const textQuery = normalize(pendientesFilterTexto);
+    if (!textQuery) return pendientesItems;
+    return pendientesItems.filter((item) => {
+      const haystack = normalize(
+        [
+          item.ot_numero != null ? String(item.ot_numero) : "",
+          item.placa ?? "",
+          item.linea_codigo ?? "",
+          item.linea_descripcion ?? "",
+        ].join(" ")
+      );
+      return haystack.includes(textQuery);
+    });
+  }, [pendientesItems, pendientesFilterTexto]);
+
+  const editingInversaItem = useMemo(
+    () => inversaItems.find((row) => row.id === editingId) ?? null,
+    [inversaItems, editingId]
+  );
+
+  const editingPendienteItem = useMemo(
+    () =>
+      pendientesItems.find((row) => row.id === editingPendienteId) ?? null,
+    [pendientesItems, editingPendienteId]
+  );
+
   const inversaVirtualizer = useVirtualizer({
     count: filteredInversa.length,
     getScrollElement: () => inversaScrollRef.current,
-    estimateSize: (index) =>
-      editingId != null && filteredInversa[index]?.id === editingId
-        ? INVERSA_EDIT_ROW_HEIGHT
-        : INVERSA_ROW_HEIGHT,
+    estimateSize: () => INVERSA_ROW_HEIGHT,
     overscan: 10,
   });
 
   useEffect(() => {
     inversaVirtualizer.measure();
-  }, [editingId, filteredInversa.length]); // eslint-disable-line react-hooks/exhaustive-deps -- measure on layout-affecting changes
+  }, [filteredInversa.length]); // eslint-disable-line react-hooks/exhaustive-deps -- measure on layout-affecting changes
 
   const inversaVirtualItems = inversaVirtualizer.getVirtualItems();
   const lastVirtualIndex =
@@ -992,7 +1366,13 @@ export default function LogisticaDashboard() {
 
   // Infinite scroll: load next Supabase page near the end of the virtual list.
   useEffect(() => {
-    if (tab !== "inversa" || !inversaHasMore || inversaLoading) return;
+    if (
+      tab !== "inversa" ||
+      inversaSubTab !== "historial" ||
+      !inversaHasMore ||
+      inversaLoading
+    )
+      return;
     if (filteredInversa.length === 0 && inversaItems.length > 0) {
       // Filters hid everything loaded — prefetch more from server.
       void loadMoreInversa();
@@ -1004,6 +1384,7 @@ export default function LogisticaDashboard() {
     }
   }, [
     tab,
+    inversaSubTab,
     lastVirtualIndex,
     filteredInversa.length,
     inversaItems.length,
@@ -1017,7 +1398,7 @@ export default function LogisticaDashboard() {
       ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
       : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
 
-  const inversaColSpan = 12;
+  const inversaColSpan = 9;
   const inversaPaddingTop = inversaVirtualItems[0]?.start ?? 0;
   const inversaPaddingBottom =
     inversaVirtualizer.getTotalSize() -
@@ -1269,6 +1650,42 @@ export default function LogisticaDashboard() {
 
       {tab === "inversa" ? (
         <div role="tabpanel" className="space-y-4">
+          <div
+            role="tablist"
+            aria-label="Secciones de logística inversa"
+            className="mb-4 flex w-fit items-center gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-1"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inversaSubTab === "historial"}
+              onClick={() => setInversaSubTab("historial")}
+              className={
+                inversaSubTab === "historial"
+                  ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
+                  : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+              }
+            >
+              <span aria-hidden>📋</span>
+              Historial
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inversaSubTab === "pendientes"}
+              onClick={() => setInversaSubTab("pendientes")}
+              className={
+                inversaSubTab === "pendientes"
+                  ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
+                  : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+              }
+            >
+              <span aria-hidden>⏳</span>
+              Pendientes
+            </button>
+          </div>
+
+          {inversaSubTab === "historial" ? (
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-end">
               <label className="block min-w-0 flex-1">
@@ -1355,8 +1772,46 @@ export default function LogisticaDashboard() {
               </button>
             </div>
           </div>
+          ) : (
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-3">
+            <label className="block min-w-0 flex-1">
+              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Buscar
+              </span>
+              <div className="relative">
+                <input
+                  type="search"
+                  value={pendientesFilterTexto}
+                  onChange={(e) => setPendientesFilterTexto(e.target.value)}
+                  placeholder="OT, Placa, Código o Descripción..."
+                  className="w-full rounded-xl border border-border bg-white py-2.5 pl-3 pr-9 text-sm text-foreground outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+                {pendientesFilterTexto ? (
+                  <button
+                    type="button"
+                    onClick={() => setPendientesFilterTexto("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:text-slate-700"
+                    aria-label="Limpiar búsqueda"
+                    title="Limpiar"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden />
+                    <span className="sr-only">✕</span>
+                  </button>
+                ) : null}
+              </div>
+            </label>
+            <button
+              type="button"
+              onClick={startAddPendiente}
+              className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent shadow-sm transition hover:bg-accent/20"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              Agregar Pendiente
+            </button>
+          </div>
+          )}
 
-          {inversaSyncMessage ? (
+          {inversaSubTab === "historial" && inversaSyncMessage ? (
             <p
               role="status"
               className={`text-right text-[11px] ${
@@ -1369,7 +1824,7 @@ export default function LogisticaDashboard() {
             </p>
           ) : null}
 
-          {inversaError ? (
+          {inversaSubTab === "historial" && inversaError ? (
             <div
               role="alert"
               className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
@@ -1378,12 +1833,21 @@ export default function LogisticaDashboard() {
             </div>
           ) : null}
 
-          {editError ? (
+          {inversaSubTab === "historial" && editError ? (
             <div
               role="alert"
               className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
             >
               {editError}
+            </div>
+          ) : null}
+
+          {inversaSubTab === "pendientes" && pendientesError ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              {pendientesError}
             </div>
           ) : null}
 
@@ -1393,6 +1857,7 @@ export default function LogisticaDashboard() {
             </p>
           ) : null}
 
+          {inversaSubTab === "historial" ? (
           <div className="overflow-hidden rounded-xl border border-border">
             <div
               ref={inversaScrollRef}
@@ -1402,18 +1867,17 @@ export default function LogisticaDashboard() {
               <table className="w-full table-fixed divide-y divide-border text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="w-24 px-1.5 py-2">Fecha Ent. Rep. Nuevo</th>
-                    <th className="w-32 px-1.5 py-2">Cliente</th>
-                    <th className="w-14 px-1.5 py-2">OT</th>
+                    <th className="w-20 px-1.5 py-2">Fecha Ent. Rep. Nuevo</th>
+                    <th className="w-[120px] px-1.5 py-2">Cliente</th>
+                    <th className="w-[60px] px-1.5 py-2">OT</th>
                     <th className="w-20 px-1.5 py-2">Placa</th>
-                    <th className="w-24 px-1.5 py-2">Código</th>
-                    <th className="px-1.5 py-2">Descripción</th>
-                    <th className="w-12 px-1.5 py-2">Cant.</th>
-                    <th className="w-24 px-1.5 py-2">Fecha Ent. Rep. Viejo</th>
-                    <th className="w-28 px-1.5 py-2">Resp. Entrega</th>
-                    <th className="w-28 px-1.5 py-2">Estado Repuesto</th>
-                    <th className="max-w-[200px] px-1.5 py-2">Observaciones</th>
-                    <th className="w-24 px-1.5 py-2">Acciones</th>
+                    <th className="w-[90px] px-1.5 py-2">Código</th>
+                    <th className="min-w-[300px] max-w-[450px] px-1.5 py-2">
+                      Descripción
+                    </th>
+                    <th className="w-10 px-1.5 py-2">Cant.</th>
+                    <th className="w-20 px-1.5 py-2">Fecha Ent. Rep. Viejo</th>
+                    <th className="w-40 px-1.5 py-2">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border bg-white">
@@ -1461,7 +1925,6 @@ export default function LogisticaDashboard() {
                         if (!item) return null;
                         const rowId = String(item.id);
                         const isSealed = Boolean(item.certificado_at);
-                        const isEditing = editingId === rowId;
                         const isCertifying = certifyingId === rowId;
                         const isClearing = clearingId === rowId;
 
@@ -1470,21 +1933,16 @@ export default function LogisticaDashboard() {
                             key={rowId}
                             item={item}
                             isSealed={isSealed}
-                            isEditing={isEditing}
                             isCertifying={isCertifying}
                             isClearing={isClearing}
-                            editSaving={editSaving}
+                            isSelling={sellingId === rowId}
                             canCertify={canCertify}
-                            editForm={editForm}
-                            planillaOptions={planillaOptions}
-                            estadoRepuestoOptions={estadoRepuestoOptions}
-                            colSpan={inversaColSpan}
                             onStartEdit={() => startEditInversa(item)}
-                            onCancelEdit={cancelEditInversa}
-                            onEditFormChange={setEditForm}
-                            onSave={() => void handleSaveInversaEdit(rowId)}
                             onLimpiar={() => void handleLimpiarInversa(rowId)}
                             onCertificar={() => void handleCertificar(rowId)}
+                            onVenderChatarrero={() =>
+                              void handleVenderChatarrero(rowId)
+                            }
                           />
                         );
                       })}
@@ -1529,6 +1987,110 @@ export default function LogisticaDashboard() {
               </div>
             ) : null}
           </div>
+          ) : (
+          <div className="overflow-hidden rounded-xl border border-border">
+            <div className="w-full overflow-x-auto">
+              <table className="w-full table-fixed divide-y divide-border text-left text-xs">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="w-[60px] px-1.5 py-2">OT</th>
+                    <th className="w-20 px-1.5 py-2">Placa</th>
+                    <th className="w-[90px] px-1.5 py-2">Código</th>
+                    <th className="min-w-[300px] max-w-[450px] px-1.5 py-2">
+                      Descripción
+                    </th>
+                    <th className="w-10 px-1.5 py-2">Cant.</th>
+                    <th className="w-20 px-1.5 py-2">Fecha Ingreso</th>
+                    <th className="w-[120px] px-1.5 py-2">Resp. Recepción</th>
+                    <th className="w-20 px-1.5 py-2">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-white">
+                  {pendientesLoading ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        <span className="inline-flex items-center gap-2 text-sm">
+                          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                          Cargando pendientes…
+                        </span>
+                      </td>
+                    </tr>
+                  ) : filteredPendientes.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-4 py-12 text-center text-muted"
+                      >
+                        {pendientesItems.length === 0 && !pendientesFilterTexto
+                          ? "No hay pendientes. Usa Agregar Pendiente para crear uno."
+                          : "No se encontraron registros"}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredPendientes.map((item) => (
+                      <PendienteRow
+                        key={item.id}
+                        item={item}
+                        isDeleting={deletingPendienteId === item.id}
+                        onStartEdit={() => startEditPendiente(item)}
+                        onDelete={() => void handleDeletePendiente(item.id)}
+                      />
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {!pendientesLoading ? (
+              <div className="border-t border-border bg-slate-50/80 px-4 py-2.5 text-xs text-muted">
+                {filteredPendientes.length} de {pendientesItems.length} registro
+                {pendientesItems.length === 1 ? "" : "s"}
+              </div>
+            ) : null}
+          </div>
+          )}
+
+          {editingInversaItem && !editingInversaItem.certificado_at ? (
+            <InversaEditModal
+              item={editingInversaItem}
+              form={editForm}
+              onChange={setEditForm}
+              planillaOptions={planillaOptions}
+              estadoRepuestoOptions={estadoRepuestoOptions}
+              saving={editSaving}
+              onSave={() => void handleSaveInversaEdit(editingInversaItem.id)}
+              onCancel={cancelEditInversa}
+            />
+          ) : null}
+
+          {addingPendiente ? (
+            <PendienteModal
+              title="Nuevo pendiente"
+              form={addPendienteForm}
+              onChange={setAddPendienteForm}
+              planillaOptions={planillaOptions}
+              estadoRepuestoOptions={estadoRepuestoOptions}
+              saving={addPendienteSaving}
+              onSave={() => void handleSaveNewPendiente()}
+              onCancel={cancelAddPendiente}
+            />
+          ) : null}
+
+          {editingPendienteItem ? (
+            <PendienteModal
+              title="Editar pendiente"
+              form={editPendienteForm}
+              onChange={setEditPendienteForm}
+              planillaOptions={planillaOptions}
+              estadoRepuestoOptions={estadoRepuestoOptions}
+              saving={editPendienteSaving}
+              createdAt={editingPendienteItem.created_at}
+              onSave={() => void handleSavePendienteEdit(editingPendienteItem.id)}
+              onCancel={cancelEditPendiente}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1552,54 +2114,29 @@ function TruncCell({
 function FragmentRow({
   item,
   isSealed,
-  isEditing,
   isCertifying,
   isClearing,
-  editSaving,
+  isSelling,
   canCertify,
-  editForm,
-  planillaOptions,
-  estadoRepuestoOptions,
-  colSpan,
   onStartEdit,
-  onCancelEdit,
-  onEditFormChange,
-  onSave,
   onLimpiar,
   onCertificar,
+  onVenderChatarrero,
 }: {
   item: LogisticaInversaRow;
   isSealed: boolean;
-  isEditing: boolean;
   isCertifying: boolean;
   isClearing: boolean;
-  editSaving: boolean;
+  isSelling: boolean;
   canCertify: boolean;
-  editForm: InversaEditForm;
-  planillaOptions: PlanillaPersona[];
-  estadoRepuestoOptions: string[];
-  colSpan: number;
   onStartEdit: () => void;
-  onCancelEdit: () => void;
-  onEditFormChange: (
-    updater: InversaEditForm | ((prev: InversaEditForm) => InversaEditForm)
-  ) => void;
-  onSave: () => void;
   onLimpiar: () => void;
   onCertificar: () => void;
+  onVenderChatarrero: () => void;
 }) {
-  const rowId = String(item.id);
   const desc = cellDash(item.linea_descripcion);
-  const obs = cellDash(item.observaciones);
   const cliente = cellDash(item.cliente_nombre);
-  const resp = cellDash(item.responsable_entrega);
-  const estado = cellDash(item.estado_repuesto);
-  const hasManualData = Boolean(
-    item.fecha_registro_retorno ||
-      item.responsable_entrega ||
-      item.estado_repuesto ||
-      item.observaciones
-  );
+  const sold = Boolean(item.vendido_chatarrero_at);
 
   return (
     <>
@@ -1610,13 +2147,13 @@ function FragmentRow({
             : "transition hover:bg-accent/5"
         }
       >
-        <td className="w-24 px-1.5 py-2 text-slate-700">
+        <td className="w-20 px-1.5 py-2 text-slate-700">
           <TruncCell value={formatFechaEntrega(item.linea_fecha_entrega)} />
         </td>
-        <td className="w-32 px-1.5 py-2 text-slate-700">
+        <td className="w-[120px] px-1.5 py-2 text-slate-700">
           <TruncCell value={cliente} />
         </td>
-        <td className="w-14 px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
+        <td className="w-[60px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
           <TruncCell
             value={
               item.ot_numero != null && item.ot_numero !== ""
@@ -1628,18 +2165,18 @@ function FragmentRow({
         <td className="w-20 px-1.5 py-2 font-medium text-foreground">
           <TruncCell value={cellDash(item.placa)} />
         </td>
-        <td className="w-24 px-1.5 py-2 font-mono text-[11px] text-slate-700">
+        <td className="w-[90px] px-1.5 py-2 font-mono text-[11px] text-slate-700">
           <TruncCell value={cellDash(item.linea_codigo)} />
         </td>
-        <td className="max-w-[150px] px-1.5 py-2 text-slate-700">
-          <TruncCell value={desc} className="max-w-[150px]" />
+        <td className="min-w-[300px] max-w-[450px] px-1.5 py-2 text-slate-700">
+          <TruncCell value={desc} className="max-w-[450px]" />
         </td>
-        <td className="w-12 px-1.5 py-2 text-center text-slate-700">
+        <td className="w-10 px-1.5 py-2 text-center text-slate-700">
           {item.linea_cantidad == null || item.linea_cantidad === ""
             ? "-"
             : formatCantidad(item.linea_cantidad)}
         </td>
-        <td className="w-24 px-1.5 py-2 text-slate-700">
+        <td className="w-20 px-1.5 py-2 text-slate-700">
           <TruncCell
             value={
               item.fecha_registro_retorno
@@ -1648,58 +2185,61 @@ function FragmentRow({
             }
           />
         </td>
-        <td className="w-28 px-1.5 py-2 text-slate-700">
-          <TruncCell value={resp} />
-        </td>
-        <td className="w-28 px-1.5 py-2 text-slate-700">
-          <TruncCell value={estado} />
-        </td>
-        <td className="max-w-[200px] px-1.5 py-2 text-slate-700">
-          <TruncCell value={obs} className="max-w-[200px]" />
-        </td>
-        <td className="w-24 px-1.5 py-2">
-          {isSealed ? (
-            <span
-              className="inline-flex items-center justify-center text-emerald-700"
-              title="Certificado"
-            >
-              <Lock className="h-4 w-4" aria-hidden />
-              <span className="sr-only">Certificado</span>
-            </span>
-          ) : isEditing ? (
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={editSaving || isCertifying || isClearing}
-              title="Guardar / Listo"
-              aria-label="Guardar"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-accent/30 bg-accent/10 text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {editSaving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-              ) : (
-                <Check className="h-4 w-4" aria-hidden />
-              )}
-            </button>
-          ) : (
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={onStartEdit}
-                title="Editar"
-                aria-label="Editar"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-white text-slate-600 transition hover:bg-slate-50 hover:text-accent"
+        <td className="w-40 px-1.5 py-2">
+          <div className="flex items-center gap-1">
+            {sold ? (
+              <span
+                className={`${ICON_BTN} cursor-default border-gray-200 bg-gray-50 text-gray-400`}
+                title={`Vendido al chatarrero ${formatFechaEntrega(item.vendido_chatarrero_at)}`}
               >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
-              </button>
-              {hasManualData ? (
+                <Recycle className="h-3.5 w-3.5" aria-hidden />
+                <span className="sr-only">
+                  Vendido al chatarrero{" "}
+                  {formatFechaEntrega(item.vendido_chatarrero_at)}
+                </span>
+              </span>
+            ) : isSealed ? (
+              <>
+                <span
+                  className={`${ICON_BTN} cursor-default border-gray-200 bg-gray-50 text-gray-400`}
+                  title="Certificado"
+                >
+                  <Lock className="h-3.5 w-3.5" aria-hidden />
+                  <span className="sr-only">Certificado</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={onVenderChatarrero}
+                  disabled={isSelling}
+                  title="Vendido al chatarrero"
+                  aria-label="Vendido al chatarrero"
+                  className={`${ICON_BTN} border-green-800/30 bg-green-50 text-green-800 hover:bg-green-100`}
+                >
+                  {isSelling ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <Recycle className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={onStartEdit}
+                  title="Editar"
+                  aria-label="Editar"
+                  className={`${ICON_BTN} border-gray-200 bg-white text-slate-600 hover:bg-slate-50`}
+                >
+                  <Pencil className="h-3.5 w-3.5" aria-hidden />
+                </button>
                 <button
                   type="button"
                   onClick={onLimpiar}
                   disabled={isClearing || isCertifying}
                   title="Limpiar"
                   aria-label="Limpiar"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-500 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`${ICON_BTN} border-red-200 bg-red-50 text-red-500 hover:bg-red-100`}
                 >
                   {isClearing ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -1707,157 +2247,532 @@ function FragmentRow({
                     <Trash2 className="h-3.5 w-3.5" aria-hidden />
                   )}
                 </button>
-              ) : null}
-              {/* TODO: restringir a user.role === 'almacenero' cuando exista sistema de roles */}
-              {canCertify ? (
-                <button
-                  type="button"
-                  onClick={onCertificar}
-                  disabled={isCertifying || isClearing}
-                  title="Certificar"
-                  aria-label="Certificar"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isCertifying ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                  )}
-                </button>
-              ) : null}
-            </div>
-          )}
+                {canCertify ? (
+                  <button
+                    type="button"
+                    onClick={onCertificar}
+                    disabled={isCertifying || isClearing}
+                    title="Certificar"
+                    aria-label="Certificar"
+                    className={`${ICON_BTN} border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100`}
+                  >
+                    {isCertifying ? (
+                      <Loader2
+                        className="h-3.5 w-3.5 animate-spin"
+                        aria-hidden
+                      />
+                    ) : (
+                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                    )}
+                  </button>
+                ) : null}
+              </>
+            )}
+          </div>
         </td>
       </tr>
-
-      {isEditing && !isSealed ? (
-        <tr className="bg-accent/5">
-          <td colSpan={colSpan} className="px-3 py-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Fecha Ent. Rep. Viejo
-                </span>
-                <input
-                  type="datetime-local"
-                  value={editForm.fecha_registro_retorno}
-                  onChange={(e) =>
-                    onEditFormChange((prev) => ({
-                      ...prev,
-                      fecha_registro_retorno: e.target.value,
-                    }))
-                  }
-                  className="w-full rounded-lg border border-border bg-white px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-                />
-              </label>
-
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Resp. Entrega
-                </span>
-                <select
-                  value={editForm.responsable_entrega}
-                  onChange={(e) =>
-                    onEditFormChange((prev) => ({
-                      ...prev,
-                      responsable_entrega: e.target.value,
-                    }))
-                  }
-                  className="w-full rounded-lg border border-border bg-white px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-                >
-                  <option value="">Seleccionar responsable…</option>
-                  {planillaOptions.map((p) => {
-                    const name = planillaOptionLabel(p);
-                    return (
-                      <option key={String(p.id)} value={name}>
-                        {name}
-                      </option>
-                    );
-                  })}
-                  {editForm.responsable_entrega &&
-                  !planillaOptions.some(
-                    (p) =>
-                      planillaOptionLabel(p) === editForm.responsable_entrega
-                  ) ? (
-                    <option value={editForm.responsable_entrega}>
-                      {editForm.responsable_entrega}
-                    </option>
-                  ) : null}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Estado Repuesto
-                </span>
-                <input
-                  type="text"
-                  list={`estados-repuesto-${rowId}`}
-                  value={editForm.estado_repuesto}
-                  onChange={(e) =>
-                    onEditFormChange((prev) => ({
-                      ...prev,
-                      estado_repuesto: e.target.value,
-                    }))
-                  }
-                  placeholder="Escribir o elegir…"
-                  className="w-full rounded-lg border border-border bg-white px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-                />
-                <datalist id={`estados-repuesto-${rowId}`}>
-                  {estadoRepuestoOptions.map((opt) => (
-                    <option key={opt} value={opt} />
-                  ))}
-                </datalist>
-              </label>
-
-              <label className="block sm:col-span-2 lg:col-span-1">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Observaciones
-                </span>
-                <textarea
-                  value={editForm.observaciones}
-                  onChange={(e) =>
-                    onEditFormChange((prev) => ({
-                      ...prev,
-                      observaciones: e.target.value,
-                    }))
-                  }
-                  rows={2}
-                  placeholder="Opcional"
-                  className="w-full rounded-lg border border-border bg-white px-2.5 py-2 text-sm text-foreground outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={onSave}
-                disabled={editSaving || isCertifying}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {editSaving ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                    Guardando…
-                  </>
-                ) : (
-                  "💾 Guardar"
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={onCancelEdit}
-                disabled={editSaving || isCertifying}
-                className="inline-flex items-center justify-center rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-            </div>
-          </td>
-        </tr>
-      ) : null}
     </>
+  );
+}
+
+function DialogShell({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-4 shadow-xl sm:p-6"
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`${ICON_BTN} border-gray-200 bg-white text-gray-500 hover:bg-gray-50`}
+            aria-label="Cerrar"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ReadonlyField({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+        {label}
+      </p>
+      <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-800">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function InversaEditModal({
+  item,
+  form,
+  onChange,
+  planillaOptions,
+  estadoRepuestoOptions,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  item: LogisticaInversaRow;
+  form: InversaEditForm;
+  onChange: (
+    updater: InversaEditForm | ((prev: InversaEditForm) => InversaEditForm)
+  ) => void;
+  planillaOptions: PlanillaPersona[];
+  estadoRepuestoOptions: string[];
+  saving: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <DialogShell title="Editar registro" onClose={onCancel}>
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <ReadonlyField
+          label="OT"
+          value={
+            item.ot_numero != null && item.ot_numero !== ""
+              ? String(item.ot_numero)
+              : "-"
+          }
+        />
+        <ReadonlyField label="Código" value={cellDash(item.linea_codigo)} />
+        <ReadonlyField
+          label="Descripción"
+          value={cellDash(item.linea_descripcion)}
+        />
+        <ReadonlyField
+          label="Cantidad"
+          value={
+            item.linea_cantidad == null || item.linea_cantidad === ""
+              ? "-"
+              : formatCantidad(item.linea_cantidad)
+          }
+        />
+        <ReadonlyField label="Placa" value={cellDash(item.placa)} />
+        <ReadonlyField label="Cliente" value={cellDash(item.cliente_nombre)} />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Fecha Entrega Viejo
+          </span>
+          <input
+            type="date"
+            value={form.fecha_registro_retorno}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                fecha_registro_retorno: e.target.value,
+              }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Responsable Entrega
+          </span>
+          <select
+            value={form.responsable_entrega}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                responsable_entrega: e.target.value,
+              }))
+            }
+            className={MODAL_INPUT_CLASS}
+          >
+            <option value="">Seleccionar responsable…</option>
+            {planillaOptions.map((p) => {
+              const name = planillaOptionLabel(p);
+              return (
+                <option key={String(p.id)} value={name}>
+                  {name}
+                </option>
+              );
+            })}
+            {form.responsable_entrega &&
+            !planillaOptions.some(
+              (p) => planillaOptionLabel(p) === form.responsable_entrega
+            ) ? (
+              <option value={form.responsable_entrega}>
+                {form.responsable_entrega}
+              </option>
+            ) : null}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Estado Repuesto
+          </span>
+          <input
+            type="text"
+            list="estados-repuesto-modal-historial"
+            value={form.estado_repuesto}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                estado_repuesto: e.target.value,
+              }))
+            }
+            placeholder="Escribir o elegir…"
+            className={MODAL_INPUT_CLASS}
+          />
+          <datalist id="estados-repuesto-modal-historial">
+            {estadoRepuestoOptions.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Observaciones
+          </span>
+          <textarea
+            value={form.observaciones}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                observaciones: e.target.value,
+              }))
+            }
+            rows={3}
+            placeholder="Opcional"
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+      </div>
+
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 disabled:opacity-60"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : null}
+          Guardar
+        </button>
+      </div>
+    </DialogShell>
+  );
+}
+
+function PendienteModal({
+  title,
+  form,
+  onChange,
+  planillaOptions,
+  estadoRepuestoOptions,
+  saving,
+  createdAt,
+  onSave,
+  onCancel,
+}: {
+  title: string;
+  form: PendienteForm;
+  onChange: (
+    updater: PendienteForm | ((prev: PendienteForm) => PendienteForm)
+  ) => void;
+  planillaOptions: PlanillaPersona[];
+  estadoRepuestoOptions: string[];
+  saving: boolean;
+  createdAt?: string | null;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <DialogShell title={title} onClose={onCancel}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            OT
+          </span>
+          <input
+            type="text"
+            value={form.ot_numero}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, ot_numero: e.target.value }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Placa
+          </span>
+          <input
+            type="text"
+            value={form.placa}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, placa: e.target.value }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Código *
+          </span>
+          <input
+            type="text"
+            value={form.linea_codigo}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, linea_codigo: e.target.value }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Descripción *
+          </span>
+          <input
+            type="text"
+            value={form.linea_descripcion}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                linea_descripcion: e.target.value,
+              }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Cant.
+          </span>
+          <input
+            type="number"
+            min={1}
+            value={form.linea_cantidad}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, linea_cantidad: e.target.value }))
+            }
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+        {createdAt ? (
+          <ReadonlyField
+            label="Fecha Ingreso"
+            value={formatFechaEntrega(createdAt)}
+          />
+        ) : null}
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Resp. Recepción
+          </span>
+          <select
+            value={form.responsable_recepcion}
+            onChange={(e) =>
+              onChange((prev) => ({
+                ...prev,
+                responsable_recepcion: e.target.value,
+              }))
+            }
+            className={MODAL_INPUT_CLASS}
+          >
+            <option value="">Seleccionar responsable…</option>
+            {planillaOptions.map((p) => {
+              const name = planillaOptionLabel(p);
+              return (
+                <option key={String(p.id)} value={name}>
+                  {name}
+                </option>
+              );
+            })}
+            {form.responsable_recepcion &&
+            !planillaOptions.some(
+              (p) => planillaOptionLabel(p) === form.responsable_recepcion
+            ) ? (
+              <option value={form.responsable_recepcion}>
+                {form.responsable_recepcion}
+              </option>
+            ) : null}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Estado Repuesto
+          </span>
+          <input
+            type="text"
+            list="estados-repuesto-modal-pendiente"
+            value={form.estado_repuesto}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, estado_repuesto: e.target.value }))
+            }
+            placeholder="Escribir o elegir…"
+            className={MODAL_INPUT_CLASS}
+          />
+          <datalist id="estados-repuesto-modal-pendiente">
+            {estadoRepuestoOptions.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Observaciones
+          </span>
+          <textarea
+            value={form.observaciones}
+            onChange={(e) =>
+              onChange((prev) => ({ ...prev, observaciones: e.target.value }))
+            }
+            rows={3}
+            className={MODAL_INPUT_CLASS}
+          />
+        </label>
+      </div>
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 disabled:opacity-60"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : null}
+          Guardar
+        </button>
+      </div>
+    </DialogShell>
+  );
+}
+
+function PendienteRow({
+  item,
+  isDeleting,
+  onStartEdit,
+  onDelete,
+}: {
+  item: LogisticaInversaPendienteRow;
+  isDeleting: boolean;
+  onStartEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <tr className="transition hover:bg-accent/5">
+      <td className="w-[60px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
+        <TruncCell
+          value={
+            item.ot_numero != null && item.ot_numero !== ""
+              ? String(item.ot_numero)
+              : "-"
+          }
+        />
+      </td>
+      <td className="w-20 px-1.5 py-2 font-medium text-foreground">
+        <TruncCell value={cellDash(item.placa)} />
+      </td>
+      <td className="w-[90px] px-1.5 py-2 font-mono text-[11px] text-slate-700">
+        <TruncCell value={cellDash(item.linea_codigo)} />
+      </td>
+      <td className="min-w-[300px] max-w-[450px] px-1.5 py-2 text-slate-700">
+        <TruncCell
+          value={cellDash(item.linea_descripcion)}
+          className="max-w-[450px]"
+        />
+      </td>
+      <td className="w-10 px-1.5 py-2 text-center text-slate-700">
+        {item.linea_cantidad == null || item.linea_cantidad === ""
+          ? "-"
+          : formatCantidad(item.linea_cantidad)}
+      </td>
+      <td className="w-20 px-1.5 py-2 text-slate-700">
+        <TruncCell value={formatFechaEntrega(item.created_at)} />
+      </td>
+      <td className="w-[120px] px-1.5 py-2 text-slate-700">
+        <TruncCell value={cellDash(item.responsable_recepcion)} />
+      </td>
+      <td className="w-20 px-1.5 py-2">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onStartEdit}
+            title="Editar"
+            aria-label="Editar"
+            className={`${ICON_BTN} border-gray-200 bg-white text-slate-600 hover:bg-slate-50`}
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={isDeleting}
+            title="Eliminar"
+            aria-label="Eliminar"
+            className={`${ICON_BTN} border-red-200 bg-red-50 text-red-500 hover:bg-red-100`}
+          >
+            {isDeleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            )}
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
