@@ -8,13 +8,23 @@ const LIST_URL =
 const DETAIL_URL_BASE =
   "https://dms-api.sigma-peru.com/api/after-sale/work-order-spare/work-order";
 
-/** Fixed range for this debug pass (do not switch to rolling 30 days yet). */
-const ENTRY_DATE_START = "2026-07-11";
-const ENTRY_DATE_END = "2026-08-10";
+const LOOKBACK_DAYS = 30;
+const LOOKAHEAD_DAYS = 1;
+const ENTRY_TZ = "America/Lima";
 const PER_PAGE = 100;
 const LIST_PAGE = 1;
 const DETAIL_CONCURRENCY = 4;
 const INSERT_BATCH = 100;
+
+/** Prefer real delivery/dispatch fields; never created_at / updated_at. */
+const SPARE_DELIVERY_DATE_FIELDS = [
+  "delivery_date",
+  "shipping_date",
+  "dispatched_at",
+  "dispatch_date",
+  "delivered_at",
+  "attention_date",
+] as const;
 
 type SigmaWorkOrderListItem = {
   id?: string | number | null;
@@ -30,6 +40,11 @@ type SigmaSpare = {
   description?: string | null;
   quantity?: number | null;
   delivery_date?: string | null;
+  shipping_date?: string | null;
+  dispatched_at?: string | null;
+  dispatch_date?: string | null;
+  delivered_at?: string | null;
+  attention_date?: string | null;
   [key: string]: unknown;
 };
 
@@ -77,12 +92,19 @@ type ListDiagnostics = {
   top_level_keys: string[];
   data_typeof: string;
   detected_count_before_id_filter: number;
+  unique_ot_ids: number;
   sample_first_3: unknown[];
   entry_date_range: { start: string; end: string };
   request_body: Record<string, unknown>;
   request_method: "POST";
   x_tenant_id: string;
   list_path_used: string | null;
+  spares_seen: number;
+  spares_with_delivery_date: number;
+  spares_without_delivery_date: number;
+  ots_empty_spares: number[];
+  sample_spare_keys: string[];
+  spare_date_fields_used: string[];
 };
 
 function isAuthorizedSyncRequest(request: NextRequest): boolean {
@@ -100,7 +122,34 @@ function requireTenantId(): string {
   return tenantId;
 }
 
-function buildListRequestBody(): Record<string, unknown> {
+function formatYmdInTimeZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function addCalendarDaysYmd(ymd: string, days: number): string {
+  const [year, month, day] = ymd.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, day + days));
+  return utc.toISOString().slice(0, 10);
+}
+
+/** OT entry date: today-30 … today+1 (Lima), not spare delivery date. */
+function computeEntryDateRange(now = new Date()): { start: string; end: string } {
+  const today = formatYmdInTimeZone(now, ENTRY_TZ);
+  return {
+    start: addCalendarDaysYmd(today, -LOOKBACK_DAYS),
+    end: addCalendarDaysYmd(today, LOOKAHEAD_DAYS),
+  };
+}
+
+function buildListRequestBody(range: {
+  start: string;
+  end: string;
+}): Record<string, unknown> {
   return {
     advisor_ids: null,
     brand_id: null,
@@ -113,8 +162,8 @@ function buildListRequestBody(): Record<string, unknown> {
       end: null,
     },
     entry_date_range: {
-      start: ENTRY_DATE_START,
-      end: ENTRY_DATE_END,
+      start: range.start,
+      end: range.end,
     },
     insurer_id: null,
     invoice_date_range: null,
@@ -390,6 +439,19 @@ function hasDeliveryDate(value: unknown): value is string {
   return s.length > 0;
 }
 
+function resolveSpareDeliveryDate(spare: SigmaSpare): {
+  value: string | null;
+  field: string | null;
+} {
+  for (const field of SPARE_DELIVERY_DATE_FIELDS) {
+    const raw = spare[field];
+    if (hasDeliveryDate(raw)) {
+      return { value: String(raw).trim(), field };
+    }
+  }
+  return { value: null, field: null };
+}
+
 function extractDetailData(json: unknown): SpareDetailPayload | null {
   if (typeof json === "string") {
     try {
@@ -452,8 +514,11 @@ type ListFetchResult =
       tenantId: string;
     };
 
-async function fetchWorkOrderListPage(token: string): Promise<ListFetchResult> {
-  const body = buildListRequestBody();
+async function fetchWorkOrderListPage(
+  token: string,
+  range: { start: string; end: string }
+): Promise<ListFetchResult> {
+  const body = buildListRequestBody(range);
   const tenantId = requireTenantId();
 
   const res = await fetch(LIST_URL, {
@@ -587,12 +652,22 @@ function resolveClienteNombre(detail: SpareDetailPayload): string | null {
   return asNonEmptyString(detail.client_name);
 }
 
-function rowConflictKey(row: {
-  ot_id: number;
-  linea_codigo: string;
-  linea_fecha_entrega: string;
-}): string {
-  return `${row.ot_id}|${row.linea_codigo}|${row.linea_fecha_entrega}`;
+function rowConflictKey(row: { ot_id: number; linea_codigo: string }): string {
+  return `${row.ot_id}|${row.linea_codigo}`;
+}
+
+function dedupeRowsByOtAndCode(
+  rows: LogisticaInversaRow[]
+): LogisticaInversaRow[] {
+  const map = new Map<string, LogisticaInversaRow>();
+  for (const row of rows) {
+    const key = rowConflictKey(row);
+    const prev = map.get(key);
+    if (!prev || row.linea_fecha_entrega > prev.linea_fecha_entrega) {
+      map.set(key, row);
+    }
+  }
+  return Array.from(map.values());
 }
 
 /**
@@ -628,7 +703,8 @@ function rowsFromDetail(
 
   for (const spare of detail.spares) {
     if (!spare || typeof spare !== "object") continue;
-    if (!hasDeliveryDate(spare.delivery_date)) continue;
+    const delivery = resolveSpareDeliveryDate(spare);
+    if (!delivery.value) continue;
 
     const codigo = asNonEmptyString(spare.code);
     if (!codigo) continue;
@@ -646,7 +722,7 @@ function rowsFromDetail(
           : spare.quantity != null && Number.isFinite(Number(spare.quantity))
             ? Number(spare.quantity)
             : null,
-      linea_fecha_entrega: String(spare.delivery_date).trim(),
+      linea_fecha_entrega: delivery.value,
       source_payload: spare,
     });
   }
@@ -655,25 +731,25 @@ function rowsFromDetail(
 }
 
 /**
- * Insert new rows; on conflict fill placa/cliente_nombre/ot_numero ONLY when
- * the existing column is NULL. Never touch manual fields
- * (responsable_entrega, estado_repuesto, observaciones).
+ * Insert new rows on UNIQUE(ot_id, linea_codigo).
+ * Supabase JS cannot express ON CONFLICT ... DO UPDATE ... WHERE, so:
+ *   1) upsert + ignoreDuplicates (insert only)
+ *   2) update incomplete rows (placa/cliente/descripcion NULL)
  *
- * Equivalent to:
- *   ON CONFLICT (...) DO UPDATE SET
- *     placa = COALESCE(logistica_inversa.placa, EXCLUDED.placa),
- *     cliente_nombre = COALESCE(..., EXCLUDED.cliente_nombre),
- *     ot_numero = COALESCE(..., EXCLUDED.ot_numero)
+ * Never touch certificado_at, fecha_registro_retorno, responsable_entrega,
+ * estado_repuesto, observaciones.
  */
 async function upsertFillNullHeaders(
   rows: LogisticaInversaRow[]
 ): Promise<number> {
-  const valid = rows.filter(
-    (r) =>
-      r.ot_numero != null &&
-      String(r.ot_numero).trim() !== "" &&
-      r.linea_codigo != null &&
-      r.linea_fecha_entrega != null
+  const valid = dedupeRowsByOtAndCode(
+    rows.filter(
+      (r) =>
+        r.ot_numero != null &&
+        String(r.ot_numero).trim() !== "" &&
+        r.linea_codigo != null &&
+        r.linea_fecha_entrega != null
+    )
   );
 
   if (valid.length === 0) return 0;
@@ -685,7 +761,7 @@ async function upsertFillNullHeaders(
     const { error: insertError } = await supabaseAdmin
       .from("logistica_inversa")
       .upsert(batch, {
-        onConflict: "ot_id,linea_codigo,linea_fecha_entrega",
+        onConflict: "ot_id,linea_codigo",
         ignoreDuplicates: true,
       });
 
@@ -696,11 +772,9 @@ async function upsertFillNullHeaders(
     const otIds = Array.from(new Set(batch.map((r) => r.ot_id)));
     const { data: existing, error: selectError } = await supabaseAdmin
       .from("logistica_inversa")
-      .select(
-        "id, ot_id, linea_codigo, linea_fecha_entrega, placa, cliente_nombre, ot_numero"
-      )
+      .select("id, ot_id, linea_codigo, placa, cliente_nombre, linea_descripcion")
       .in("ot_id", otIds)
-      .or("placa.is.null,cliente_nombre.is.null,ot_numero.is.null");
+      .or("placa.is.null,cliente_nombre.is.null,linea_descripcion.is.null");
 
     if (selectError) {
       throw new Error(`Supabase select backfill: ${selectError.message}`);
@@ -715,32 +789,20 @@ async function upsertFillNullHeaders(
         rowConflictKey({
           ot_id: Number(ex.ot_id),
           linea_codigo: String(ex.linea_codigo),
-          linea_fecha_entrega: String(ex.linea_fecha_entrega),
         })
       );
       if (!incoming) continue;
 
-      const patch: {
-        placa?: string;
-        cliente_nombre?: string;
-        ot_numero?: string;
-      } = {};
-
-      if (ex.placa == null && incoming.placa != null) {
-        patch.placa = incoming.placa;
-      }
-      if (ex.cliente_nombre == null && incoming.cliente_nombre != null) {
-        patch.cliente_nombre = incoming.cliente_nombre;
-      }
-      if (ex.ot_numero == null && incoming.ot_numero != null) {
-        patch.ot_numero = incoming.ot_numero;
-      }
-
-      if (Object.keys(patch).length === 0) continue;
-
       const { error: updateError } = await supabaseAdmin
         .from("logistica_inversa")
-        .update(patch)
+        .update({
+          ot_numero: incoming.ot_numero,
+          placa: incoming.placa,
+          cliente_nombre: incoming.cliente_nombre,
+          linea_descripcion: incoming.linea_descripcion,
+          linea_cantidad: incoming.linea_cantidad,
+          linea_fecha_entrega: incoming.linea_fecha_entrega,
+        })
         .eq("id", ex.id);
 
       if (updateError) {
@@ -757,6 +819,7 @@ async function upsertFillNullHeaders(
 }
 
 function emptyDiagnostics(
+  range: { start: string; end: string },
   partial?: Partial<ListDiagnostics>
 ): ListDiagnostics {
   return {
@@ -764,12 +827,19 @@ function emptyDiagnostics(
     top_level_keys: [],
     data_typeof: "undefined",
     detected_count_before_id_filter: 0,
+    unique_ot_ids: 0,
     sample_first_3: [],
-    entry_date_range: { start: ENTRY_DATE_START, end: ENTRY_DATE_END },
-    request_body: buildListRequestBody(),
+    entry_date_range: range,
+    request_body: buildListRequestBody(range),
     request_method: "POST",
     x_tenant_id: process.env.SIGMA_TENANT_ID ?? "(missing)",
     list_path_used: null,
+    spares_seen: 0,
+    spares_with_delivery_date: 0,
+    spares_without_delivery_date: 0,
+    ots_empty_spares: [],
+    sample_spare_keys: [],
+    spare_date_fields_used: [],
     ...partial,
   };
 }
@@ -789,7 +859,7 @@ function failureJson(
       total_details_fetched: 0,
       spares_with_delivery: 0,
       inserted_attempted: 0,
-      diagnostics: diagnostics ?? emptyDiagnostics(),
+      diagnostics: diagnostics ?? emptyDiagnostics(entry_date_range),
       errors: [{ id: -1, error: message }],
       error: message,
     },
@@ -798,7 +868,7 @@ function failureJson(
 }
 
 export async function POST(request: NextRequest) {
-  const entry_date_range = { start: ENTRY_DATE_START, end: ENTRY_DATE_END };
+  const entry_date_range = computeEntryDateRange();
 
   try {
     if (!isAuthorizedSyncRequest(request)) {
@@ -816,13 +886,13 @@ export async function POST(request: NextRequest) {
       token = await sigmaLogin();
     }
 
-    let listResult = await fetchWorkOrderListPage(token);
+    let listResult = await fetchWorkOrderListPage(token, entry_date_range);
     if (
       !listResult.ok &&
       (listResult.status === 401 || listResult.status === 403)
     ) {
       token = await sigmaLogin();
-      listResult = await fetchWorkOrderListPage(token);
+      listResult = await fetchWorkOrderListPage(token, entry_date_range);
     }
 
     if (!listResult.ok) {
@@ -837,7 +907,7 @@ export async function POST(request: NextRequest) {
           report_status: listResult.status,
           report_response_body: listResult.responseText.slice(0, 4000),
           error: `report-api HTTP ${listResult.status}`,
-          diagnostics: emptyDiagnostics({
+          diagnostics: emptyDiagnostics(entry_date_range, {
             report_status: listResult.status,
             request_body: listResult.body,
             x_tenant_id: listResult.tenantId,
@@ -879,18 +949,28 @@ export async function POST(request: NextRequest) {
       if (otNum) otNumeroById.set(id, otNum);
     }
     const uniqueIds = Array.from(new Set(ids));
+    console.log(
+      `[sync-inversa] unique OT ids from list: ${uniqueIds.length} (raw rows=${list.length})`
+    );
 
     const diagnostics: ListDiagnostics = {
       report_status: listResult.status,
       top_level_keys: topLevelKeys(payload),
       data_typeof: describeDataType(rootData),
       detected_count_before_id_filter: list.length,
+      unique_ot_ids: uniqueIds.length,
       sample_first_3: list.slice(0, 3).map(sanitizeSampleItem),
       entry_date_range,
       request_body: listResult.body,
       request_method: "POST",
       x_tenant_id: listResult.tenantId,
       list_path_used: path,
+      spares_seen: 0,
+      spares_with_delivery_date: 0,
+      spares_without_delivery_date: 0,
+      ots_empty_spares: [],
+      sample_spare_keys: [],
+      spare_date_fields_used: [],
     };
 
     if (uniqueIds.length === 0) {
@@ -924,6 +1004,7 @@ export async function POST(request: NextRequest) {
     let sparesWithDelivery = 0;
     let skippedNoSpares = 0;
     let skippedNoOtNumero = 0;
+    const dateFieldsUsed = new Set<string>();
 
     for (let i = 0; i < uniqueIds.length; i += DETAIL_CONCURRENCY) {
       const chunk = uniqueIds.slice(i, i + DETAIL_CONCURRENCY);
@@ -947,6 +1028,8 @@ export async function POST(request: NextRequest) {
           // Missing detail or missing spares should not abort the whole sync.
           if (!("error" in r) || !r.error) {
             skippedNoSpares += 1;
+            diagnostics.ots_empty_spares.push(r.id);
+            console.warn(`[sync-inversa] OT id=${r.id} sin detalle / spares vacío`);
             continue;
           }
           console.error(`[sync-inversa] detail ${r.id}:`, errMsg);
@@ -956,11 +1039,37 @@ export async function POST(request: NextRequest) {
 
         if (!Array.isArray(r.detail.spares) || r.detail.spares.length === 0) {
           skippedNoSpares += 1;
+          diagnostics.ots_empty_spares.push(r.id);
+          console.warn(`[sync-inversa] OT id=${r.id} spares vacío`);
           continue;
         }
 
+        if (diagnostics.sample_spare_keys.length === 0) {
+          const firstSpare = r.detail.spares.find(
+            (s) => s && typeof s === "object"
+          );
+          if (firstSpare) {
+            diagnostics.sample_spare_keys = Object.keys(firstSpare);
+            console.log(
+              "[sync-inversa] sample spare keys:",
+              diagnostics.sample_spare_keys.join(", ")
+            );
+          }
+        }
+
+        for (const spare of r.detail.spares) {
+          if (!spare || typeof spare !== "object") continue;
+          diagnostics.spares_seen += 1;
+          const delivery = resolveSpareDeliveryDate(spare);
+          if (delivery.value) {
+            diagnostics.spares_with_delivery_date += 1;
+            if (delivery.field) dateFieldsUsed.add(delivery.field);
+          } else {
+            diagnostics.spares_without_delivery_date += 1;
+          }
+        }
+
         detailsFetched += 1;
-        const before = collected.length;
         const rows = rowsFromDetail(
           r.detail,
           otNumeroById.get(r.id) ?? null
@@ -975,9 +1084,13 @@ export async function POST(request: NextRequest) {
         }
         sparesWithDelivery += rows.length;
         collected.push(...rows);
-        void before;
       }
     }
+
+    diagnostics.spare_date_fields_used = Array.from(dateFieldsUsed);
+    console.log(
+      `[sync-inversa] spares with delivery=${diagnostics.spares_with_delivery_date} without=${diagnostics.spares_without_delivery_date} empty_ot_ids=${diagnostics.ots_empty_spares.join(",") || "(none)"} fields=${diagnostics.spare_date_fields_used.join(",") || "(none)"}`
+    );
 
     let insertedAttempted = 0;
     try {
