@@ -179,6 +179,13 @@ function excelFecha(value: string | null | undefined) {
   return formatted === "-" ? "" : formatted;
 }
 
+function excelFechaHora(value: string | null | undefined) {
+  if (value == null || value.trim() === "") return "";
+  const d = new Date(value.trim());
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 function todayYmdLocal() {
   const d = new Date();
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -853,6 +860,7 @@ export default function LogisticaDashboard() {
       Observaciones: asText(item.observaciones),
       Certificado: item.certificado_at ? "SÍ" : "NO",
       "Vendido Chatarrero": item.vendido_chatarrero_at ? "SÍ" : "NO",
+      "FECHA VENTA CHATARRERO": excelFechaHora(item.vendido_chatarrero_at),
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
@@ -1007,10 +1015,12 @@ export default function LogisticaDashboard() {
     setSellingId(id);
     setEditError(null);
 
-    const vendidoAt = new Date().toISOString();
+    const updateData = {
+      vendido_chatarrero_at: new Date().toISOString(),
+    };
     const { data, error } = await supabase
       .from("logistica_inversa")
-      .update({ vendido_chatarrero_at: vendidoAt })
+      .update(updateData)
       .eq("id", id)
       .select("id, vendido_chatarrero_at")
       .maybeSingle();
@@ -1042,7 +1052,8 @@ export default function LogisticaDashboard() {
           ? {
               ...row,
               vendido_chatarrero_at:
-                asText(data.vendido_chatarrero_at) || vendidoAt,
+                asText(data.vendido_chatarrero_at) ||
+                updateData.vendido_chatarrero_at,
             }
           : row
       )
