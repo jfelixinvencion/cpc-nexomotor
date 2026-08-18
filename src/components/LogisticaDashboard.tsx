@@ -105,6 +105,14 @@ type PendienteForm = {
 
 type LogisticaTab = "control-ot" | "inversa";
 type InversaSubTab = "historial" | "pendientes";
+type GestionEstadoFiltro = "vendido" | "certificado" | "pendiente" | "vacios";
+
+const GESTION_ESTADO_OPTIONS: { value: GestionEstadoFiltro; label: string }[] = [
+  { value: "vendido", label: "Vendido a Chatarra" },
+  { value: "certificado", label: "Certificado" },
+  { value: "pendiente", label: "Pendiente de Certificar" },
+  { value: "vacios", label: "Vacíos" },
+];
 
 const OT_STATUS_LABELS: Record<string, string> = {
   WAITING_FOR_ASSIGNMENT: "Espera asignación",
@@ -456,7 +464,12 @@ export default function LogisticaDashboard() {
   const [inversaError, setInversaError] = useState<string | null>(null);
   const [inversaFilterTexto, setInversaFilterTexto] = useState("");
   const [inversaSubTab, setInversaSubTab] = useState<InversaSubTab>("historial");
-  const [hideCompletados, setHideCompletados] = useState(false);
+  const [gestionEstadoFiltros, setGestionEstadoFiltros] = useState<
+    GestionEstadoFiltro[]
+  >([]);
+  const [estadoRepuestoFiltros, setEstadoRepuestoFiltros] = useState<string[]>(
+    []
+  );
   const [inversaSyncing, setInversaSyncing] = useState(false);
   const [inversaSyncMessage, setInversaSyncMessage] = useState<{
     type: "success" | "error";
@@ -1308,13 +1321,22 @@ export default function LogisticaDashboard() {
     [inversaItems, pendientesItems]
   );
 
+  const historialEstadoRepuestoOptions = useMemo(
+    () => uniqueSorted(inversaItems.map((i) => i.estado_repuesto)),
+    [inversaItems]
+  );
+
   const filteredInversa = useMemo(() => {
     const textQuery = normalize(inversaFilterTexto);
+    const estadoRepuestoNorm = new Set(
+      estadoRepuestoFiltros.map((v) => normalize(v))
+    );
 
     return inversaItems.filter((item) => {
-      if (hideCompletados && item.certificado_at) {
-        return false;
-      }
+      const estaCertificado = Boolean(item.certificado_at?.trim());
+      const estaVendido = Boolean(item.vendido_chatarrero_at?.trim());
+      const tieneFechaEntViejo =
+        formatFechaEntrega(item.fecha_registro_retorno) !== "-";
 
       if (textQuery) {
         const haystack = normalize(
@@ -1329,9 +1351,29 @@ export default function LogisticaDashboard() {
         if (!haystack.includes(textQuery)) return false;
       }
 
+      if (gestionEstadoFiltros.length > 0) {
+        const matchesGestion = gestionEstadoFiltros.some((key) => {
+          if (key === "vendido") return estaVendido;
+          if (key === "certificado") return estaCertificado && !estaVendido;
+          if (key === "pendiente") return !estaCertificado && tieneFechaEntViejo;
+          return !tieneFechaEntViejo;
+        });
+        if (!matchesGestion) return false;
+      }
+
+      if (estadoRepuestoNorm.size > 0) {
+        const rowEstado = normalize(item.estado_repuesto ?? "");
+        if (!rowEstado || !estadoRepuestoNorm.has(rowEstado)) return false;
+      }
+
       return true;
     });
-  }, [inversaItems, inversaFilterTexto, hideCompletados]);
+  }, [
+    inversaItems,
+    inversaFilterTexto,
+    gestionEstadoFiltros,
+    estadoRepuestoFiltros,
+  ]);
 
   const filteredPendientes = useMemo(() => {
     const textQuery = normalize(pendientesFilterTexto);
@@ -1409,7 +1451,7 @@ export default function LogisticaDashboard() {
       ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
       : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
 
-  const inversaColSpan = 9;
+  const inversaColSpan = 10;
   const inversaPaddingTop = inversaVirtualItems[0]?.start ?? 0;
   const inversaPaddingBottom =
     inversaVirtualizer.getTotalSize() -
@@ -1726,31 +1768,21 @@ export default function LogisticaDashboard() {
                 </div>
               </label>
 
-              <button
-                type="button"
-                role="switch"
-                aria-checked={hideCompletados}
-                onClick={() => setHideCompletados((prev) => !prev)}
-                className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium shadow-sm transition sm:mb-0 ${
-                  hideCompletados
-                    ? "border-accent/40 bg-accent/10 text-accent"
-                    : "border-border bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                <span
-                  aria-hidden
-                  className={`relative h-5 w-9 rounded-full transition ${
-                    hideCompletados ? "bg-accent" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${
-                      hideCompletados ? "left-4" : "left-0.5"
-                    }`}
-                  />
-                </span>
-                Ocultar completados
-              </button>
+              <MultiSelectDropdown
+                label="Estado"
+                options={GESTION_ESTADO_OPTIONS}
+                selected={gestionEstadoFiltros}
+                onChange={setGestionEstadoFiltros}
+              />
+              <MultiSelectDropdown
+                label="Estado Repuesto"
+                options={historialEstadoRepuestoOptions.map((value) => ({
+                  value,
+                  label: value,
+                }))}
+                selected={estadoRepuestoFiltros}
+                onChange={setEstadoRepuestoFiltros}
+              />
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
@@ -1872,23 +1904,22 @@ export default function LogisticaDashboard() {
           <div className="overflow-hidden rounded-xl border border-border">
             <div
               ref={inversaScrollRef}
-              className="w-full overflow-y-auto"
+              className="w-full overflow-y-auto overflow-x-hidden"
               style={{ height: "calc(100vh - 220px)" }}
             >
               <table className="w-full table-fixed divide-y divide-border text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="w-20 px-1.5 py-2">Fecha Ent. Rep. Nuevo</th>
-                    <th className="w-[120px] px-1.5 py-2">Cliente</th>
-                    <th className="w-[60px] px-1.5 py-2">OT</th>
-                    <th className="w-20 px-1.5 py-2">Placa</th>
-                    <th className="w-[90px] px-1.5 py-2">Código</th>
-                    <th className="min-w-[300px] max-w-[450px] px-1.5 py-2">
-                      Descripción
-                    </th>
+                    <th className="w-[72px] px-1.5 py-2">Fecha Ent. Nuevo</th>
+                    <th className="w-[130px] px-1.5 py-2">Cliente</th>
+                    <th className="w-[56px] px-1.5 py-2">OT</th>
+                    <th className="w-[70px] px-1.5 py-2">Placa</th>
+                    <th className="w-[100px] px-1.5 py-2">Código</th>
+                    <th className="min-w-0 px-1.5 py-2">Descripción</th>
                     <th className="w-10 px-1.5 py-2">Cant.</th>
-                    <th className="w-20 px-1.5 py-2">Fecha Ent. Rep. Viejo</th>
-                    <th className="w-40 px-1.5 py-2">Acciones</th>
+                    <th className="w-[96px] px-1.5 py-2">Estado Repuesto</th>
+                    <th className="w-[72px] px-1.5 py-2">Fecha Ent. Viejo</th>
+                    <th className="w-36 px-1.5 py-2">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border bg-white">
@@ -1912,7 +1943,8 @@ export default function LogisticaDashboard() {
                       >
                         {inversaItems.length === 0 &&
                         !inversaFilterTexto &&
-                        !hideCompletados
+                        gestionEstadoFiltros.length === 0 &&
+                        estadoRepuestoFiltros.length === 0
                           ? "No hay registros en la base de datos. Si en Supabase sí hay filas, revisa las políticas RLS (SELECT) de public.logistica_inversa."
                           : "No se encontraron registros"}
                       </td>
@@ -2122,6 +2154,101 @@ function TruncCell({
   );
 }
 
+function MultiSelectDropdown<T extends string>({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  selected: T[];
+  onChange: (next: T[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  function toggle(value: T) {
+    if (selectedSet.has(value)) {
+      onChange(selected.filter((item) => item !== value));
+    } else {
+      onChange([...selected, value]);
+    }
+  }
+
+  const count = selected.length;
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((prev) => !prev)}
+        className={`inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm shadow-sm transition ${
+          count > 0
+            ? "border-accent/40 bg-accent/10 text-accent"
+            : "border-gray-300 bg-white text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        {count > 0 ? `${label} (${count})` : label} ▾
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          aria-multiselectable
+          className="absolute left-0 z-30 mt-1 min-w-[240px] rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+        >
+          <div className="flex items-center justify-end border-b border-gray-100 px-2 pb-1">
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              disabled={count === 0}
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 disabled:opacity-40"
+            >
+              Limpiar
+            </button>
+          </div>
+          <div className="max-h-56 overflow-y-auto">
+            {options.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-slate-400">Sin opciones</p>
+            ) : (
+              options.map((opt) => (
+                <label
+                  key={opt.value}
+                  className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(opt.value)}
+                    onChange={() => toggle(opt.value)}
+                    className="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                  <span className="truncate" title={opt.label}>
+                    {opt.label}
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function FragmentRow({
   item,
   isSealed,
@@ -2158,13 +2285,13 @@ function FragmentRow({
             : "transition hover:bg-accent/5"
         }
       >
-        <td className="w-20 px-1.5 py-2 text-slate-700">
+        <td className="w-[72px] px-1.5 py-2 text-slate-700">
           <TruncCell value={formatFechaEntrega(item.linea_fecha_entrega)} />
         </td>
-        <td className="w-[120px] px-1.5 py-2 text-slate-700">
+        <td className="w-[130px] px-1.5 py-2 text-slate-700">
           <TruncCell value={cliente} />
         </td>
-        <td className="w-[60px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
+        <td className="w-[56px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
           <TruncCell
             value={
               item.ot_numero != null && item.ot_numero !== ""
@@ -2173,21 +2300,24 @@ function FragmentRow({
             }
           />
         </td>
-        <td className="w-20 px-1.5 py-2 font-medium text-foreground">
+        <td className="w-[70px] px-1.5 py-2 font-medium text-foreground">
           <TruncCell value={cellDash(item.placa)} />
         </td>
-        <td className="w-[90px] px-1.5 py-2 font-mono text-[11px] text-slate-700">
+        <td className="w-[100px] px-1.5 py-2 font-mono text-[11px] text-slate-700">
           <TruncCell value={cellDash(item.linea_codigo)} />
         </td>
-        <td className="min-w-[300px] max-w-[450px] px-1.5 py-2 text-slate-700">
-          <TruncCell value={desc} className="max-w-[450px]" />
+        <td className="min-w-0 px-1.5 py-2 text-slate-700">
+          <TruncCell value={desc} />
         </td>
         <td className="w-10 px-1.5 py-2 text-center text-slate-700">
           {item.linea_cantidad == null || item.linea_cantidad === ""
             ? "-"
             : formatCantidad(item.linea_cantidad)}
         </td>
-        <td className="w-20 px-1.5 py-2 text-slate-700">
+        <td className="w-[96px] px-1.5 py-2 text-slate-700">
+          <TruncCell value={cellDash(item.estado_repuesto)} />
+        </td>
+        <td className="w-[72px] px-1.5 py-2 text-slate-700">
           <TruncCell
             value={
               item.fecha_registro_retorno
@@ -2196,7 +2326,7 @@ function FragmentRow({
             }
           />
         </td>
-        <td className="w-40 px-1.5 py-2">
+        <td className="w-36 px-1.5 py-2">
           <div className="flex items-center gap-1">
             {sold ? (
               <span
