@@ -9,7 +9,7 @@ import { supabase } from "@/lib/supabase/client";
 const COMPRAS_PAGE_SIZE = 100;
 const COMPRAS_EXPORT_PAGE_SIZE = 500;
 const COMPRAS_ROW_HEIGHT = 48;
-const COMPRAS_COL_SPAN = 7;
+const COMPRAS_COL_SPAN = 8;
 const COMPRAS_SELECT =
   "numero_oc,fecha_creacion,proveedor,codigo_repuesto,descripcion_repuesto,cantidad,precio_total_con_igv_soles";
 
@@ -86,13 +86,8 @@ function calcPUnitSinIgv(
   return Math.round(value * 100) / 100;
 }
 
-function formatPUnitSinIgv(
-  precioTotalConIgv: unknown,
-  cantidad: unknown
-): string {
-  const n = calcPUnitSinIgv(precioTotalConIgv, cantidad);
-  if (n == null) return "-";
-  return `S/ ${n.toLocaleString("es-PE", {
+function formatSoles(value: number): string {
+  return `S/ ${value.toLocaleString("es-PE", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -714,10 +709,13 @@ export default function LogisticaComprasTab() {
                 <th className="w-[108px] px-1.5 py-2">FECHA</th>
                 <th className="w-[210px] px-1.5 py-2">PROVEEDOR</th>
                 <th className="w-[132px] px-1.5 py-2">CÓDIGO</th>
-                <th className="min-w-0 px-1.5 py-2">DESCRIPCIÓN</th>
+                <th className="min-w-0 px-1 py-2">DESCRIPCIÓN</th>
                 <th className="w-[72px] px-1.5 py-2 text-right">CANTIDAD</th>
                 <th className="w-[120px] px-1.5 py-2 text-right">
                   P. UNIT. SIN IGV
+                </th>
+                <th className="w-[120px] px-1.5 py-2 text-right">
+                  P. UNIT. INC. IGV
                 </th>
               </tr>
             </thead>
@@ -764,6 +762,18 @@ export default function LogisticaComprasTab() {
                     const proveedor = asText(item.proveedor) || "-";
                     const codigo = asText(item.codigo_repuesto) || "-";
                     const descripcion = asText(item.descripcion_repuesto) || "-";
+                    const pUnitSinIgv = calcPUnitSinIgv(
+                      item.precio_total_con_igv_soles,
+                      item.cantidad
+                    );
+                    const pUnitSinIgvLabel =
+                      pUnitSinIgv == null ? "-" : formatSoles(pUnitSinIgv);
+                    const pUnitIncIgvLabel =
+                      pUnitSinIgv == null
+                        ? "-"
+                        : formatSoles(
+                            Math.round(pUnitSinIgv * 1.18 * 100) / 100
+                          );
                     return (
                       <tr
                         key={item.rowIndex}
@@ -783,17 +793,17 @@ export default function LogisticaComprasTab() {
                         <td className="w-[132px] px-1.5 py-2 font-mono text-[11px] text-slate-700">
                           <TruncCell value={codigo} />
                         </td>
-                        <td className="min-w-0 px-1.5 py-2 text-slate-700">
+                        <td className="min-w-0 px-1 py-2 text-slate-700">
                           <TruncCell value={descripcion} />
                         </td>
                         <td className="w-[72px] px-1.5 py-2 text-right text-slate-700">
                           {formatCantidad(item.cantidad)}
                         </td>
                         <td className="w-[120px] px-1.5 py-2 text-right font-medium text-slate-700">
-                          {formatPUnitSinIgv(
-                            item.precio_total_con_igv_soles,
-                            item.cantidad
-                          )}
+                          {pUnitSinIgvLabel}
+                        </td>
+                        <td className="w-[120px] px-1.5 py-2 text-right font-medium text-slate-700">
+                          {pUnitIncIgvLabel}
                         </td>
                       </tr>
                     );
