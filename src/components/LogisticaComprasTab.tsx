@@ -1,20 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { FileSpreadsheet, Loader2, X } from "lucide-react";
 import * as XLSX from "xlsx";
+import DocumentoDetalleModal from "@/components/control-documentario/DocumentoDetalleModal";
 import { supabase } from "@/lib/supabase/client";
 
 const COMPRAS_PAGE_SIZE = 100;
 const COMPRAS_EXPORT_PAGE_SIZE = 500;
 const COMPRAS_ROW_HEIGHT = 48;
-const COMPRAS_COL_SPAN = 8;
+const COMPRAS_COL_SPAN = 9;
 const COMPRAS_SELECT =
-  "numero_oc,fecha_creacion,proveedor,codigo_repuesto,descripcion_repuesto,cantidad,precio_total_con_igv_soles";
+  "sigma_id,linea_orden,numero_oc,fecha_creacion,proveedor,codigo_repuesto,descripcion_repuesto,cantidad,precio_total_con_igv_soles";
+const ESTADO_LINEAS_DEBOUNCE_MS = 200;
+const ESTADO_LINEAS_MAX = 500;
+
+type LineaDocEstado = {
+  documento_id: string;
+  confirmado: boolean;
+} | null;
 
 type OcDetalleRow = {
   rowIndex: number;
+  sigma_id: number | null;
+  linea_orden: number | null;
   numero_oc: string | null;
   fecha_creacion: string | null;
   proveedor: string | null;
@@ -27,6 +37,17 @@ type OcDetalleRow = {
 function asText(value: unknown) {
   if (value == null) return "";
   return String(value).trim();
+}
+
+function asOptionalInt(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function lineaEstadoKey(sigmaId: number, lineaOrden: number) {
+  return `${sigmaId}:${lineaOrden}`;
 }
 
 function pad2(n: number) {
@@ -173,6 +194,8 @@ function mapOcDetalleRow(
 ): OcDetalleRow {
   return {
     rowIndex,
+    sigma_id: asOptionalInt(row.sigma_id),
+    linea_orden: asOptionalInt(row.linea_orden),
     numero_oc: row.numero_oc == null || row.numero_oc === "" ? null : String(row.numero_oc),
     fecha_creacion: asText(row.fecha_creacion) || null,
     proveedor: asText(row.proveedor) || null,
@@ -206,6 +229,44 @@ function TruncCell({
     </span>
   );
 }
+
+const DocStatusDot = memo(function DocStatusDot({
+  estado,
+  onOpen,
+}: {
+  estado: LineaDocEstado | undefined;
+  onOpen: (documentoId: string) => void;
+}) {
+  if (estado === undefined) {
+    return (
+      <span
+        className="inline-block h-2.5 w-2.5 rounded-full bg-slate-300"
+        title="Consultando..."
+        aria-label="Consultando documento"
+      />
+    );
+  }
+  if (estado === null) {
+    return (
+      <span
+        className="inline-block h-2.5 w-2.5 rounded-full bg-red-500"
+        title="Sin documento"
+        aria-label="Sin documento"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      title="Ver documento"
+      aria-label="Ver documento"
+      onClick={() => onOpen(estado.documento_id)}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-full hover:bg-emerald-50"
+    >
+      <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
+    </button>
+  );
+});
 
 function applyPrecioColumnFormat(worksheet: XLSX.WorkSheet) {
   const ref = worksheet["!ref"];
@@ -241,6 +302,12 @@ export default function LogisticaComprasTab() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [lineaEstado, setLineaEstado] = useState<Record<string, LineaDocEstado>>(
+    {}
+  );
+  const [detailDocumentoId, setDetailDocumentoId] = useState<string | null>(
+    null
+  );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadedCountRef = useRef(0);
@@ -248,6 +315,9 @@ export default function LogisticaComprasTab() {
   const fetchGenRef = useRef(0);
   const exportMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lineaEstadoRef = useRef(lineaEstado);
+  lineaEstadoRef.current = lineaEstado;
+  const pendingLineasRef = useRef(new Set<string>());
   const fechaRangeInvalid = isFechaRangeInvalid(fechaDesde, fechaHasta);
 
   useEffect(() => {
@@ -400,6 +470,7 @@ export default function LogisticaComprasTab() {
   const virtualItems = virtualizer.getVirtualItems();
   const lastVirtualIndex =
     virtualItems[virtualItems.length - 1]?.index ?? -1;
+  const firstVirtualIndex = virtualItems[0]?.index ?? 0;
   const paddingTop = virtualItems[0]?.start ?? 0;
   const paddingBottom =
     virtualizer.getTotalSize() -
@@ -412,6 +483,78 @@ export default function LogisticaComprasTab() {
       void loadMore();
     }
   }, [lastVirtualIndex, items.length, hasMore, loading, loadMore]);
+
+  const openDocumento = useCallback((documentoId: string) => {
+    setDetailDocumentoId(documentoId);
+  }, []);
+
+  const fetchEstadoLineas = useCallback(async (keys: string[]) => {
+    const unique = Array.from(new Set(keys)).filter((key) => {
+      if (key in lineaEstadoRef.current) return false;
+      if (pendingLineasRef.current.has(key)) return false;
+      return true;
+    });
+    if (unique.length === 0) return;
+
+    for (const key of unique) pendingLineasRef.current.add(key);
+
+    try {
+      for (let i = 0; i < unique.length; i += ESTADO_LINEAS_MAX) {
+        const chunk = unique.slice(i, i + ESTADO_LINEAS_MAX);
+        const params = new URLSearchParams();
+        params.set("lineas", chunk.join(","));
+        const res = await fetch(
+          `/api/control-documentario/estado-lineas?${params.toString()}`
+        );
+        const json = (await res.json()) as {
+          success?: boolean;
+          error?: string;
+          data?: {
+            sigma_id: number;
+            linea_orden: number;
+            documento_id: string;
+            confirmado: boolean;
+          }[];
+        };
+        if (!res.ok || json.success === false) {
+          throw new Error(json.error || "No se pudo consultar el estado");
+        }
+        const updates: Record<string, LineaDocEstado> = {};
+        for (const key of chunk) updates[key] = null;
+        for (const row of json.data ?? []) {
+          updates[lineaEstadoKey(Number(row.sigma_id), Number(row.linea_orden))] =
+            {
+              documento_id: String(row.documento_id),
+              confirmado: Boolean(row.confirmado),
+            };
+        }
+        setLineaEstado((prev) => ({ ...prev, ...updates }));
+      }
+    } catch {
+      // Deja las claves sin cachear para reintentar al volver a entrar en vista.
+    } finally {
+      for (const key of unique) pendingLineasRef.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (lastVirtualIndex < 0 || items.length === 0) return;
+    const keys: string[] = [];
+    const end = Math.min(lastVirtualIndex, items.length - 1);
+    for (let i = firstVirtualIndex; i <= end; i += 1) {
+      const item = items[i];
+      if (!item || item.sigma_id == null || item.linea_orden == null) continue;
+      const key = lineaEstadoKey(item.sigma_id, item.linea_orden);
+      if (key in lineaEstadoRef.current) continue;
+      if (pendingLineasRef.current.has(key)) continue;
+      keys.push(key);
+    }
+    if (keys.length === 0) return;
+    const timer = setTimeout(() => {
+      void fetchEstadoLineas(keys);
+    }, ESTADO_LINEAS_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [firstVirtualIndex, lastVirtualIndex, items, fetchEstadoLineas]);
 
   const hasActiveFilters =
     searchInput.trim() !== "" || fechaDesde !== "" || fechaHasta !== "";
@@ -705,6 +848,7 @@ export default function LogisticaComprasTab() {
           <table className="w-full table-fixed divide-y divide-border text-left text-xs">
             <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
+                <th className="w-10 px-1 py-2 text-center">Doc.</th>
                 <th className="w-[100px] px-1.5 py-2">OC</th>
                 <th className="w-[108px] px-1.5 py-2">FECHA</th>
                 <th className="w-[210px] px-1.5 py-2">PROVEEDOR</th>
@@ -774,11 +918,23 @@ export default function LogisticaComprasTab() {
                         : formatSoles(
                             Math.round(pUnitSinIgv * 1.18 * 100) / 100
                           );
+                    const estadoDoc =
+                      item.sigma_id == null || item.linea_orden == null
+                        ? null
+                        : lineaEstado[
+                            lineaEstadoKey(item.sigma_id, item.linea_orden)
+                          ];
                     return (
                       <tr
                         key={item.rowIndex}
                         className="transition hover:bg-accent/5"
                       >
+                        <td className="w-10 px-1 py-2 text-center">
+                          <DocStatusDot
+                            estado={estadoDoc}
+                            onOpen={openDocumento}
+                          />
+                        </td>
                         <td className="w-[100px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
                           <TruncCell value={oc} />
                         </td>
@@ -848,6 +1004,14 @@ export default function LogisticaComprasTab() {
           </div>
         ) : null}
       </div>
+
+      {detailDocumentoId ? (
+        <DocumentoDetalleModal
+          documentoId={detailDocumentoId}
+          modoSoloLectura
+          onClose={() => setDetailDocumentoId(null)}
+        />
+      ) : null}
     </div>
   );
 }

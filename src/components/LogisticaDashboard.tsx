@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ClipboardList,
   FileSpreadsheet,
+  FileText,
   Loader2,
   Lock,
   Pencil,
@@ -26,6 +27,7 @@ import {
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 import LogisticaComprasTab from "@/components/LogisticaComprasTab";
+import LogisticaControlDocumentarioTab from "@/components/LogisticaControlDocumentarioTab";
 
 const INVERSA_PAGE_SIZE = 200;
 const INVERSA_ROW_HEIGHT = 48;
@@ -105,7 +107,7 @@ type PendienteForm = {
   observaciones: string;
 };
 
-type LogisticaTab = "control-ot" | "inversa" | "compras";
+type LogisticaTab = "control-ot" | "inversa" | "compras" | "documentario";
 type InversaSubTab = "historial" | "pendientes";
 type GestionEstadoFiltro = "vendido" | "certificado" | "pendiente" | "vacios";
 
@@ -1505,6 +1507,19 @@ export default function LogisticaDashboard() {
             <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
           ) : null}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "documentario"}
+          onClick={() => setTab("documentario")}
+          className={tabButtonClass(tab === "documentario")}
+        >
+          <FileText className="h-4 w-4" aria-hidden />
+          <span className="truncate">Control Documentario</span>
+          {tab === "documentario" ? (
+            <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          ) : null}
+        </button>
       </div>
 
       {tab === "control-ot" ? (
@@ -2153,6 +2168,7 @@ export default function LogisticaDashboard() {
       ) : null}
 
       {tab === "compras" ? <LogisticaComprasTab /> : null}
+      {tab === "documentario" ? <LogisticaControlDocumentarioTab /> : null}
     </div>
   );
 }
