@@ -17,6 +17,11 @@ export const MIME_PERMITIDOS = [
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/xml",
+  "text/xml",
+  "application/zip",
+  "application/x-zip-compressed",
+  "text/html",
 ] as const;
 
 export const DOCUMENTO_SELECT =

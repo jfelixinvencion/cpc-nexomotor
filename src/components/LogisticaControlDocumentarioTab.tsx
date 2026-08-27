@@ -47,6 +47,26 @@ const MIME_OK = new Set([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/xml",
+  "text/xml",
+  "application/zip",
+  "application/x-zip-compressed",
+  "text/html",
+]);
+const ADJUNTO_EXT_OK = new Set([
+  "pdf",
+  "doc",
+  "docx",
+  "xml",
+  "zip",
+  "html",
+  "htm",
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "heic",
+  "heif",
 ]);
 
 type DocumentoListItem = {
@@ -142,6 +162,18 @@ function toMoney(value: unknown) {
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+function fileExt(name: string) {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+function isAllowedAdjuntoFile(file: File) {
+  const mime = (file.type || "").toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  if (MIME_OK.has(mime)) return true;
+  return ADJUNTO_EXT_OK.has(fileExt(file.name));
 }
 
 function lineKey(item: { sigma_id: number; linea_orden: number }) {
@@ -766,6 +798,7 @@ function EditorModal({
   const [placa, setPlaca] = useState("");
   const [descripcion, setDescripcion] = useState("DELIVERY");
   const [valorConIgvInput, setValorConIgvInput] = useState("");
+  const [montoManual, setMontoManual] = useState(false);
   const [observaciones, setObservaciones] = useState("");
   const [lineas, setLineas] = useState<LineaDisponible[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -779,15 +812,19 @@ function EditorModal({
     [lineas, selected]
   );
 
-  const valorConIgv = esDelivery
-    ? toMoney(valorConIgvInput.replace(",", "."))
-    : round2(
-        selectedLineas.reduce(
-          (sum, l) => sum + toMoney(l.precio_total_con_igv_soles),
-          0
-        )
-      );
+  const autoValorConIgv = round2(
+    selectedLineas.reduce(
+      (sum, l) => sum + toMoney(l.precio_total_con_igv_soles),
+      0
+    )
+  );
+  const valorConIgv = toMoney(valorConIgvInput.replace(",", "."));
   const valorSinIgv = round2(valorConIgv / 1.18);
+
+  useEffect(() => {
+    if (loading || esDelivery || montoManual) return;
+    setValorConIgvInput(autoValorConIgv.toFixed(2));
+  }, [loading, esDelivery, montoManual, autoValorConIgv]);
 
   useEffect(() => {
     if (!documentoId) return;
@@ -821,11 +858,14 @@ function EditorModal({
         setRazonSocial(d.razon_social ?? "");
         setPlaca(d.placa ?? "");
         setDescripcion(d.descripcion || (d.es_delivery ? "DELIVERY" : ""));
-        setValorConIgvInput(String(d.valor_con_igv ?? ""));
+        setValorConIgvInput(toMoney(d.valor_con_igv).toFixed(2));
+        setMontoManual(false);
         setObservaciones(d.observaciones ?? "");
         setExistingAdjuntos(d.adjuntos ?? []);
         if (!d.es_delivery && oc) {
-          await loadLineas(oc, documentoId, d.items ?? []);
+          await loadLineas(oc, documentoId, d.items ?? [], {
+            savedValorConIgv: toMoney(d.valor_con_igv),
+          });
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Error");
@@ -862,7 +902,8 @@ function EditorModal({
   async function loadLineas(
     oc: string,
     docId?: string | null,
-    preselected?: LineaDisponible[]
+    preselected?: LineaDisponible[],
+    opts?: { savedValorConIgv?: number }
   ) {
     setLineasLoading(true);
     try {
@@ -894,6 +935,19 @@ function EditorModal({
         }
       }
       setSelected(next);
+      if (opts?.savedValorConIgv != null) {
+        const autoSum = round2(
+          (json.items ?? [])
+            .filter((item) => next.has(lineKey(item)))
+            .reduce(
+              (sum, l) => sum + toMoney(l.precio_total_con_igv_soles),
+              0
+            )
+        );
+        if (Math.abs(autoSum - opts.savedValorConIgv) > 0.009) {
+          setMontoManual(true);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar líneas");
       setLineas([]);
@@ -913,6 +967,7 @@ function EditorModal({
     } else {
       setRazonSocial(opt.proveedor ?? "");
       setRuc(opt.nro_document ?? "");
+      setMontoManual(false);
       void loadLineas(opt.numero_oc, documentoId);
     }
   }
@@ -929,7 +984,7 @@ function EditorModal({
         setError(`El archivo “${file.name}” supera el máximo de 10 MB.`);
         continue;
       }
-      if (file.type && !MIME_OK.has(file.type) && !file.type.startsWith("image/")) {
+      if (!isAllowedAdjuntoFile(file)) {
         setError(`El archivo “${file.name}” tiene un tipo no permitido.`);
         continue;
       }
@@ -958,6 +1013,10 @@ function EditorModal({
     setSaving(true);
     setError(null);
     try {
+      const parsedValor = toMoney(valorConIgvInput.replace(",", "."));
+      if (!Number.isFinite(parsedValor) || parsedValor < 0) {
+        throw new Error("Valor Con IGV debe ser un número positivo.");
+      }
       const ocValue = esDelivery && sinOc ? TEXTO_SIN_OC : numeroOc.trim();
       const payload = {
         es_delivery: esDelivery,
@@ -972,7 +1031,7 @@ function EditorModal({
         razon_social: esDelivery ? razonSocial : razonSocial.trim(),
         placa: placa.trim() || null,
         descripcion: esDelivery ? descripcion.trim() : resumenRepuestos(selectedLineas),
-        valor_con_igv: valorConIgv,
+        valor_con_igv: parsedValor,
         observaciones: observaciones.trim() || null,
         items: esDelivery
           ? []
@@ -1062,10 +1121,14 @@ function EditorModal({
                   setLineas([]);
                   setSelected(new Set());
                   setRuc("");
+                  setMontoManual(false);
                   if (!descripcion) setDescripcion("DELIVERY");
                   setDescripcion((d) => d || "DELIVERY");
-                } else if (numeroOc && numeroOc !== TEXTO_SIN_OC) {
-                  void loadLineas(numeroOc, documentoId);
+                } else {
+                  setMontoManual(false);
+                  if (numeroOc && numeroOc !== TEXTO_SIN_OC) {
+                    void loadLineas(numeroOc, documentoId);
+                  }
                 }
               }}
             />
@@ -1203,7 +1266,7 @@ function EditorModal({
               </span>
               <input className={INPUT_CLASS} value={placa} onChange={(e) => setPlaca(e.target.value)} />
             </label>
-            <label className="block">
+            <div className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
                 Valor Con IGV
               </span>
@@ -1212,11 +1275,36 @@ function EditorModal({
                 type="number"
                 min="0"
                 step="0.01"
-                value={esDelivery ? valorConIgvInput : String(valorConIgv)}
-                readOnly={!esDelivery}
-                onChange={(e) => setValorConIgvInput(e.target.value)}
+                inputMode="decimal"
+                value={valorConIgvInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setValorConIgvInput("");
+                    return;
+                  }
+                  const n = Number(raw.replace(",", "."));
+                  if (!Number.isFinite(n) || n < 0) return;
+                  setValorConIgvInput(raw);
+                }}
               />
-            </label>
+              {!esDelivery ? (
+                <label className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={montoManual}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setMontoManual(on);
+                      if (!on) {
+                        setValorConIgvInput(autoValorConIgv.toFixed(2));
+                      }
+                    }}
+                  />
+                  Monto manual
+                </label>
+              ) : null}
+            </div>
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
                 Valor Sin IGV
@@ -1328,7 +1416,7 @@ function EditorModal({
             <input
               type="file"
               multiple
-              accept="image/*,.pdf,.doc,.docx,image/heic,image/heif"
+              accept="image/*,.pdf,.doc,.docx,.xml,.zip,.html"
               className="block w-full text-sm"
               onChange={(e) => {
                 onFiles(e.target.files);

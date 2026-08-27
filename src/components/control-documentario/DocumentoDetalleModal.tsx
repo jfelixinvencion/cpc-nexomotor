@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Download, FileText, Loader2, Lock, X } from "lucide-react";
+import { Download, FileArchive, FileCode, FileText, Loader2, Lock, X } from "lucide-react";
 
 export type DocumentoDetalleItem = {
   sigma_id: number;
@@ -86,6 +86,31 @@ function isImageMime(mime: string | null | undefined) {
   return Boolean(mime && mime.toLowerCase().startsWith("image/"));
 }
 
+function fileExt(name: string) {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+function isXmlAdjunto(a: Pick<DocumentoAdjunto, "mime_type" | "nombre_archivo">) {
+  const mime = (a.mime_type || "").toLowerCase();
+  return mime === "application/xml" || mime === "text/xml" || fileExt(a.nombre_archivo) === "xml";
+}
+
+function isZipAdjunto(a: Pick<DocumentoAdjunto, "mime_type" | "nombre_archivo">) {
+  const mime = (a.mime_type || "").toLowerCase();
+  return (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    fileExt(a.nombre_archivo) === "zip"
+  );
+}
+
+function isHtmlAdjunto(a: Pick<DocumentoAdjunto, "mime_type" | "nombre_archivo">) {
+  const mime = (a.mime_type || "").toLowerCase();
+  const ext = fileExt(a.nombre_archivo);
+  return mime === "text/html" || ext === "html" || ext === "htm";
+}
+
 function ocLabel(doc: Pick<DocumentoDetalle, "es_delivery" | "numero_oc">) {
   const oc = (doc.numero_oc ?? "").trim();
   if (doc.es_delivery && (!oc || oc === "Sin OC")) return "Delivery";
@@ -104,7 +129,13 @@ export default function DocumentoDetalleModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocumentoDetalle | null>(null);
-  const [preview, setPreview] = useState<DocumentoAdjunto | null>(null);
+  const [preview, setPreview] = useState<
+    | { kind: "image"; adjunto: DocumentoAdjunto }
+    | { kind: "xml"; adjunto: DocumentoAdjunto; text: string }
+    | { kind: "html"; adjunto: DocumentoAdjunto }
+    | null
+  >(null);
+  const [xmlLoading, setXmlLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +176,20 @@ export default function DocumentoDetalleModal({
 
   void modoSoloLectura;
 
+  async function openXmlPreview(adjunto: DocumentoAdjunto) {
+    setXmlLoading(true);
+    try {
+      const res = await fetch(adjunto.signed_url);
+      const text = await res.text();
+      if (!res.ok) throw new Error("No se pudo leer el XML");
+      setPreview({ kind: "xml", adjunto, text });
+    } catch {
+      window.open(adjunto.signed_url, "_blank", "noopener,noreferrer");
+    } finally {
+      setXmlLoading(false);
+    }
+  }
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center">
@@ -174,11 +219,17 @@ export default function DocumentoDetalleModal({
               {error}
             </p>
           ) : doc ? (
-            <DetalleBody doc={doc} onPreview={setPreview} />
+            <DetalleBody
+              doc={doc}
+              xmlLoading={xmlLoading}
+              onPreviewImage={(a) => setPreview({ kind: "image", adjunto: a })}
+              onPreviewXml={(a) => void openXmlPreview(a)}
+              onPreviewHtml={(a) => setPreview({ kind: "html", adjunto: a })}
+            />
           ) : null}
         </div>
       </div>
-      {preview ? (
+      {preview?.kind === "image" ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
           <button
             type="button"
@@ -189,14 +240,14 @@ export default function DocumentoDetalleModal({
           <div className="relative z-10 max-h-full max-w-5xl">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={preview.signed_url}
-              alt={preview.nombre_archivo}
+              src={preview.adjunto.signed_url}
+              alt={preview.adjunto.nombre_archivo}
               className="max-h-[85vh] rounded-lg object-contain"
             />
             <div className="mt-2 flex justify-end gap-2">
               <a
-                href={preview.signed_url}
-                download={preview.nombre_archivo}
+                href={preview.adjunto.signed_url}
+                download={preview.adjunto.nombre_archivo}
                 className="rounded bg-white px-3 py-1 text-sm"
               >
                 Descargar
@@ -212,16 +263,101 @@ export default function DocumentoDetalleModal({
           </div>
         </div>
       ) : null}
+      {preview?.kind === "xml" ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="Cerrar"
+            onClick={() => setPreview(null)}
+          />
+          <div className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="truncate text-sm font-medium">{preview.adjunto.nombre_archivo}</p>
+              <div className="flex shrink-0 gap-2">
+                <a
+                  href={preview.adjunto.signed_url}
+                  download={preview.adjunto.nombre_archivo}
+                  className="rounded border border-gray-200 px-3 py-1 text-sm"
+                >
+                  Descargar
+                </a>
+                <button
+                  type="button"
+                  className="rounded border border-gray-200 px-3 py-1 text-sm"
+                  onClick={() => setPreview(null)}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+            <pre className="max-h-[75vh] overflow-auto rounded-lg bg-slate-50 p-3 text-xs text-slate-800 whitespace-pre-wrap break-all">
+              {preview.text}
+            </pre>
+          </div>
+        </div>
+      ) : null}
+      {preview?.kind === "html" ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="Cerrar"
+            onClick={() => setPreview(null)}
+          />
+          <div className="relative z-10 flex h-[85vh] w-full max-w-5xl flex-col rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="truncate text-sm font-medium">{preview.adjunto.nombre_archivo}</p>
+              <div className="flex shrink-0 gap-2">
+                <a
+                  href={preview.adjunto.signed_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-gray-200 px-3 py-1 text-sm"
+                >
+                  Abrir pestaña
+                </a>
+                <a
+                  href={preview.adjunto.signed_url}
+                  download={preview.adjunto.nombre_archivo}
+                  className="rounded border border-gray-200 px-3 py-1 text-sm"
+                >
+                  Descargar
+                </a>
+                <button
+                  type="button"
+                  className="rounded border border-gray-200 px-3 py-1 text-sm"
+                  onClick={() => setPreview(null)}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+            <iframe
+              title={preview.adjunto.nombre_archivo}
+              src={preview.adjunto.signed_url}
+              sandbox=""
+              className="h-full w-full rounded-lg border border-gray-200 bg-white"
+            />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
 
 function DetalleBody({
   doc,
-  onPreview,
+  xmlLoading,
+  onPreviewImage,
+  onPreviewXml,
+  onPreviewHtml,
 }: {
   doc: DocumentoDetalle;
-  onPreview: (adjunto: DocumentoAdjunto) => void;
+  xmlLoading: boolean;
+  onPreviewImage: (adjunto: DocumentoAdjunto) => void;
+  onPreviewXml: (adjunto: DocumentoAdjunto) => void;
+  onPreviewHtml: (adjunto: DocumentoAdjunto) => void;
 }) {
   return (
     <>
@@ -301,7 +437,7 @@ function DetalleBody({
                   key={a.id}
                   type="button"
                   className="overflow-hidden rounded-lg border border-gray-200 text-left hover:border-accent"
-                  onClick={() => onPreview(a)}
+                  onClick={() => onPreviewImage(a)}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -322,37 +458,81 @@ function DetalleBody({
                   </div>
                 </button>
               ) : (
-                <div
+                <DocumentoCard
                   key={a.id}
-                  className="flex items-center gap-2 rounded-lg border border-gray-200 p-3"
-                >
-                  <FileText className="h-8 w-8 shrink-0 text-slate-400" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{a.nombre_archivo}</p>
-                    <p className="text-[11px] text-slate-500">{formatBytes(a.tamano_bytes)}</p>
-                  </div>
-                  <a
-                    href={a.signed_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs font-medium text-accent"
-                  >
-                    Ver
-                  </a>
-                  <a
-                    href={a.signed_url}
-                    download={a.nombre_archivo}
-                    className="text-xs font-medium text-slate-600"
-                  >
-                    <Download className="h-4 w-4" />
-                  </a>
-                </div>
+                  adjunto={a}
+                  xmlLoading={xmlLoading}
+                  onPreviewXml={onPreviewXml}
+                  onPreviewHtml={onPreviewHtml}
+                />
               )
             )}
           </div>
         )}
       </div>
     </>
+  );
+}
+
+function DocumentoCard({
+  adjunto,
+  xmlLoading,
+  onPreviewXml,
+  onPreviewHtml,
+}: {
+  adjunto: DocumentoAdjunto;
+  xmlLoading: boolean;
+  onPreviewXml: (adjunto: DocumentoAdjunto) => void;
+  onPreviewHtml: (adjunto: DocumentoAdjunto) => void;
+}) {
+  const zip = isZipAdjunto(adjunto);
+  const xml = isXmlAdjunto(adjunto);
+  const html = isHtmlAdjunto(adjunto);
+  const Icon = zip ? FileArchive : xml || html ? FileCode : FileText;
+
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-gray-200 p-3">
+      <Icon className="h-8 w-8 shrink-0 text-slate-400" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{adjunto.nombre_archivo}</p>
+        <p className="text-[11px] text-slate-500">{formatBytes(adjunto.tamano_bytes)}</p>
+      </div>
+      {xml ? (
+        <button
+          type="button"
+          disabled={xmlLoading}
+          onClick={() => onPreviewXml(adjunto)}
+          className="text-xs font-medium text-accent disabled:opacity-60"
+        >
+          Ver
+        </button>
+      ) : html ? (
+        <button
+          type="button"
+          onClick={() => onPreviewHtml(adjunto)}
+          className="text-xs font-medium text-accent"
+        >
+          Ver
+        </button>
+      ) : zip ? null : (
+        <a
+          href={adjunto.signed_url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs font-medium text-accent"
+        >
+          Ver
+        </a>
+      )}
+      <a
+        href={adjunto.signed_url}
+        download={adjunto.nombre_archivo}
+        className="text-xs font-medium text-slate-600"
+        title="Descargar"
+      >
+        <Download className="h-4 w-4" />
+      </a>
+    </div>
   );
 }
 
