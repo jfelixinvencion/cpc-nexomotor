@@ -19,6 +19,36 @@ export type AdjuntoPublico = {
 
 const MIME_SET = new Set<string>(MIME_PERMITIDOS);
 
+const EXT_MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  heic: "image/heic",
+  heif: "image/heif",
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xml: "application/xml",
+  zip: "application/zip",
+  html: "text/html",
+  htm: "text/html",
+};
+
+function fileExtension(name: string) {
+  const base = name.trim().replace(/^.*[\\/]/, "");
+  const i = base.lastIndexOf(".");
+  return i >= 0 ? base.slice(i + 1).toLowerCase() : "";
+}
+
+export function resolveAllowedMime(file: File): string | null {
+  const mime = (file.type || "").toLowerCase();
+  if (MIME_SET.has(mime)) return mime;
+  const mapped = EXT_MIME[fileExtension(file.name)];
+  if (mapped && MIME_SET.has(mapped)) return mapped;
+  return null;
+}
+
 export function sanitizeFileName(name: string): string {
   const trimmed = name.trim();
   const base = trimmed.replace(/^.*[\\/]/, "");
@@ -37,8 +67,7 @@ export function validateArchivo(file: File): string | null {
   if (file.size > MAX_TAMANO_BYTES) {
     return `El archivo “${nombre}” supera el máximo de 10 MB.`;
   }
-  const mime = (file.type || "").toLowerCase();
-  if (!MIME_SET.has(mime)) {
+  if (!resolveAllowedMime(file)) {
     return `El archivo “${nombre}” tiene un tipo no permitido.`;
   }
   return null;
@@ -86,7 +115,8 @@ export async function uploadArchivo(
   const { error } = await supabaseAdmin.storage
     .from(BUCKET_DOCUMENTOS)
     .upload(path, buffer, {
-      contentType: file.type || "application/octet-stream",
+      contentType:
+        resolveAllowedMime(file) || file.type || "application/octet-stream",
       upsert: false,
     });
 

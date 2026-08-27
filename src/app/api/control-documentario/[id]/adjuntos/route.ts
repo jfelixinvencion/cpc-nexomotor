@@ -10,6 +10,7 @@ import { isUuid } from "@/lib/control-documentario/parse";
 import {
   buildStoragePath,
   removeStoragePaths,
+  resolveAllowedMime,
   toAdjuntoPublico,
   uploadArchivo,
   validateArchivo,
@@ -118,7 +119,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           documento_id: id,
           storage_path: path,
           nombre_archivo: file.name.trim(),
-          mime_type: file.type || null,
+          mime_type: resolveAllowedMime(file) || file.type || null,
           tamano_bytes: file.size,
         })
         .select(ADJUNTO_SELECT)
