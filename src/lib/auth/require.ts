@@ -21,11 +21,45 @@ export class AuthError extends Error {
   }
 }
 
-export function authErrorResponse(error: AuthError) {
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
+export function authErrorResponse(error: AuthError | HttpError) {
   return NextResponse.json(
     { success: false, error: error.message },
     { status: error.status }
   );
+}
+
+export function jsonOk(payload: Record<string, unknown>, status = 200) {
+  return NextResponse.json({ success: true, ...payload }, { status });
+}
+
+export async function handleAuthRoute(
+  req: NextRequest,
+  fn: (session: SessionPayload) => Promise<NextResponse>
+): Promise<NextResponse> {
+  try {
+    const session = await requireSession(req);
+    return await fn(session);
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof HttpError) {
+      return authErrorResponse(err);
+    }
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    console.error("[auth] route:", message);
+    return NextResponse.json(
+      { success: false, error: "Error interno." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function requireSession(

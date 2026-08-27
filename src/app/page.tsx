@@ -22,6 +22,9 @@ import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDa
 import ConsumiblesAdminDashboard from "@/components/ConsumiblesAdminDashboard";
 import ConsumiblesAlmacenDashboard from "@/components/ConsumiblesAlmacenDashboard";
 import LogisticaDashboard from "@/components/LogisticaDashboard";
+import PerfilesDashboard from "@/components/PerfilesDashboard";
+import UsuariosDashboard from "@/components/UsuariosDashboard";
+import type { PermisoItem } from "@/lib/auth/permissions";
 
 type View =
   | "landing"
@@ -31,7 +34,12 @@ type View =
   | "administracion"
   | "logistica";
 type WarehouseTab = "herramientas" | "consumibles";
-type AdminTab = "planilla" | "herramientas" | "consumibles";
+type AdminTab =
+  | "planilla"
+  | "herramientas"
+  | "consumibles"
+  | "perfiles"
+  | "usuarios";
 type ActiveAreaId = "almacen" | "administracion" | "logistica";
 
 const SESSION_KEY = "nexo_session";
@@ -645,8 +653,73 @@ function WarehouseView() {
   );
 }
 
+type AdminMeState =
+  | { status: "loading" }
+  | { status: "legacy" }
+  | { status: "expired" }
+  | { status: "error"; message: string }
+  | { status: "ok"; permisos: PermisoItem[] };
+
 function AdministracionView({ onBack }: { onBack: () => void }) {
   const [tab, setTab] = useState<AdminTab>("planilla");
+  const [me, setMe] = useState<AdminMeState>({ status: "loading" });
+
+  useEffect(() => {
+    const session = readSession();
+    if (session?.source !== "real") {
+      setMe({ status: "legacy" });
+      return;
+    }
+
+    let cancelled = false;
+    setMe({ status: "loading" });
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/auth/me", {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (cancelled) return;
+        if (res.status === 401) {
+          setMe({ status: "expired" });
+          return;
+        }
+        const json = (await res.json().catch(() => ({}))) as {
+          success?: boolean;
+          error?: string;
+          data?: { permisos?: PermisoItem[] };
+        };
+        if (!res.ok || json.success === false) {
+          setMe({
+            status: "error",
+            message: json.error || "No se pudo verificar la sesión.",
+          });
+          return;
+        }
+        setMe({
+          status: "ok",
+          permisos: Array.isArray(json.data?.permisos) ? json.data.permisos : [],
+        });
+      } catch {
+        if (!cancelled) {
+          setMe({
+            status: "error",
+            message: "No se pudo verificar la sesión.",
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const sessionOk = me.status === "ok";
+  const sessionExpired = me.status === "expired";
+  const isLegacy = me.status === "legacy";
+  const permisos = me.status === "ok" ? me.permisos : [];
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-12">
@@ -684,13 +757,15 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
         <div
           role="tablist"
           aria-label="Secciones de administración"
-          className="flex border-b border-border bg-slate-50/80"
+          className="flex flex-wrap border-b border-border bg-slate-50/80"
         >
           {(
             [
               { id: "planilla", label: "PLANILLA", icon: BookOpen },
               { id: "herramientas", label: "HERRAMIENTAS", icon: Wrench },
               { id: "consumibles", label: "CONSUMIBLES", icon: Package },
+              { id: "perfiles", label: "PERFILES", icon: Shield },
+              { id: "usuarios", label: "USUARIOS", icon: Users },
             ] as const
           ).map((item) => {
             const selected = tab === item.id;
@@ -702,7 +777,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setTab(item.id)}
-                className={`relative flex flex-1 items-center justify-center gap-2 px-3 py-3.5 text-sm font-semibold transition sm:px-6 ${
+                className={`relative flex min-w-[7.5rem] flex-1 items-center justify-center gap-2 px-2 py-3.5 text-xs font-semibold transition sm:px-4 sm:text-sm ${
                   selected
                     ? "bg-surface text-emerald-700"
                     : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
@@ -719,12 +794,34 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
         </div>
 
         <div role="tabpanel" className="p-5 sm:p-8">
-          {tab === "planilla" ? (
+          {me.status === "error" &&
+          (tab === "perfiles" || tab === "usuarios") ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              {me.message}
+            </div>
+          ) : tab === "planilla" ? (
             <PlanillaDashboard />
           ) : tab === "herramientas" ? (
             <HerramientasDashboard />
-          ) : (
+          ) : tab === "consumibles" ? (
             <ConsumiblesAdminDashboard />
+          ) : tab === "perfiles" ? (
+            <PerfilesDashboard
+              sessionOk={sessionOk}
+              sessionExpired={sessionExpired}
+              isLegacy={isLegacy}
+              permisos={permisos}
+            />
+          ) : (
+            <UsuariosDashboard
+              sessionOk={sessionOk}
+              sessionExpired={sessionExpired}
+              isLegacy={isLegacy}
+              permisos={permisos}
+            />
           )}
         </div>
       </div>
