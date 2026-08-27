@@ -48,6 +48,8 @@ type NexoSession = {
   user: string;
   loggedIn: boolean;
   timestamp: number;
+  /** Presente en sesiones nuevas. Ausente en nexo_session antiguas (tratar como mock). */
+  source?: "mock" | "real";
 };
 
 function isPersistableView(value: string | null): value is View {
@@ -67,14 +69,15 @@ function readSession(): NexoSession | null {
   }
 }
 
-function writeSession() {
+function writeSession(opts?: { user?: string; source?: "mock" | "real" }) {
   if (typeof window === "undefined") return;
   localStorage.setItem(
     SESSION_KEY,
     JSON.stringify({
-      user: "Admin",
+      user: opts?.user ?? "Admin",
       loggedIn: true,
       timestamp: Date.now(),
+      source: opts?.source ?? "mock",
     } satisfies NexoSession)
   );
 }
@@ -366,24 +369,50 @@ function LoginView({
   onSuccess,
   onCancel,
 }: {
-  onSuccess: () => void;
+  onSuccess: (info: { source: "mock" | "real"; user: string }) => void;
   onCancel: () => void;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (username.trim() === MOCK_USER && password === MOCK_PASSWORD) {
+    const user = username.trim();
+    if (user === MOCK_USER && password === MOCK_PASSWORD) {
       setError("");
-      onSuccess();
+      onSuccess({ source: "mock", user: MOCK_USER });
       return;
     }
-    setError("Usuario o contraseña incorrectos.");
-    setShake(true);
-    window.setTimeout(() => setShake(false), 450);
+
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ username: user, password }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!res.ok || json.success === false) {
+        throw new Error(json.error || "Usuario o contraseña incorrectos");
+      }
+      onSuccess({ source: "real", user });
+    } catch {
+      setError("Usuario o contraseña incorrectos.");
+      setShake(true);
+      window.setTimeout(() => setShake(false), 450);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -456,14 +485,16 @@ function LoginView({
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-accent px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-accent/25 transition hover:bg-accent-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            disabled={submitting}
+            className="w-full rounded-xl bg-accent px-4 py-3.5 text-sm font-semibold text-white shadow-md shadow-accent/25 transition hover:bg-accent-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Entrar al panel
+            {submitting ? "Ingresando…" : "Entrar al panel"}
           </button>
           <button
             type="button"
             onClick={onCancel}
-            className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            disabled={submitting}
+            className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
           >
             Volver al inicio
           </button>
@@ -749,8 +780,12 @@ export default function Home() {
     setView("login");
   }
 
-  function handleLoginSuccess() {
-    writeSession();
+  function handleLoginSuccess(info: { source: "mock" | "real"; user: string }) {
+    if (info.source === "mock") {
+      writeSession({ source: "mock" });
+    } else {
+      writeSession({ user: info.user, source: "real" });
+    }
     setIsAuthenticated(true);
     setView("dashboard");
     writeView("dashboard");
@@ -758,6 +793,7 @@ export default function Home() {
 
   function handleLogout() {
     clearSessionStorage();
+    void fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setIsAuthenticated(false);
     setView("login");
   }
