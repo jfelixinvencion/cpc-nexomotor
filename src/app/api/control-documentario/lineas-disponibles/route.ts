@@ -2,8 +2,17 @@ import { NextRequest } from "next/server";
 import { itemsTable, ocDetallesTable } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
 import { isUuid } from "@/lib/control-documentario/parse";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 export async function GET(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "ver"
+  );
+  if (denied) return denied;
+
   try {
     const numeroOc = (request.nextUrl.searchParams.get("numero_oc") ?? "").trim();
     const documentoId = (

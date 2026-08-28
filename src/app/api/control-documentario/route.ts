@@ -15,6 +15,7 @@ import {
   type DocumentoRow,
 } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
+import { enforceIfRealSession } from "@/lib/auth/require";
 import {
   isYmd,
   parseDocumentoPayload,
@@ -67,6 +68,14 @@ function headerInsert(parsed: DocumentoParsed, descripcion: string | null) {
 }
 
 export async function GET(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "ver"
+  );
+  if (denied) return denied;
+
   try {
     const sp = request.nextUrl.searchParams;
     const search = (sp.get("search") ?? "").trim();
@@ -167,6 +176,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "crear"
+  );
+  if (denied) return denied;
+
   try {
     const body = await request.json().catch(() => null);
     const parsed = parseDocumentoPayload(body);

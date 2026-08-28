@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { documentosTable, itemsTable } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 /**
  * GET /api/control-documentario/estado-lineas?lineas=sigma_id:linea_orden,...
@@ -48,6 +49,14 @@ function parseLineasParam(request: NextRequest): Pair[] | { error: string } {
 }
 
 export async function GET(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "compras",
+    "ver_documentos"
+  );
+  if (denied) return denied;
+
   try {
     const parsed = parseLineasParam(request);
     if ("error" in parsed) return jsonError(parsed.error, 400);

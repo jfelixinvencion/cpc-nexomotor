@@ -1,8 +1,17 @@
 import { NextRequest } from "next/server";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
 import { ocDetallesTable } from "@/lib/control-documentario/db";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 export async function GET(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "ver"
+  );
+  if (denied) return denied;
+
   try {
     const search = (request.nextUrl.searchParams.get("search") ?? "").trim();
     let query = ocDetallesTable()

@@ -24,6 +24,7 @@ import DocumentoDetalleModal, {
   type DocumentoAdjunto,
   type DocumentoDetalle,
 } from "@/components/control-documentario/DocumentoDetalleModal";
+import { usePermisos } from "@/lib/auth/usePermisos";
 
 const INPUT_CLASS =
   "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
@@ -213,6 +214,27 @@ function TruncCell({ value }: { value: string }) {
 }
 
 export default function LogisticaControlDocumentarioTab() {
+  const { puede } = usePermisos();
+  const canCrear = puede("logistica", "control_documentario", "crear");
+  const canEditar = puede("logistica", "control_documentario", "editar");
+  const canEliminar = puede("logistica", "control_documentario", "eliminar");
+  const canConfirmar = puede("logistica", "control_documentario", "confirmar");
+  const canExportar = puede("logistica", "control_documentario", "exportar");
+  const canSubirAdjuntos = puede(
+    "logistica",
+    "control_documentario",
+    "adjuntos_subir"
+  );
+  const canEliminarAdjuntos = puede(
+    "logistica",
+    "control_documentario",
+    "adjuntos_eliminar"
+  );
+  const canDescargarAdjuntos = puede(
+    "logistica",
+    "control_documentario",
+    "adjuntos_descargar"
+  );
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
@@ -457,6 +479,7 @@ export default function LogisticaControlDocumentarioTab() {
           </button>
         </div>
         <div className="flex shrink-0 gap-1">
+          {canCrear ? (
           <button
             type="button"
             onClick={() => {
@@ -468,6 +491,8 @@ export default function LogisticaControlDocumentarioTab() {
             <Plus className="h-3.5 w-3.5" />
             Nuevo Registro
           </button>
+          ) : null}
+          {canExportar ? (
           <button
             type="button"
             onClick={() => void handleExport()}
@@ -481,6 +506,7 @@ export default function LogisticaControlDocumentarioTab() {
             )}
             {exporting ? "Exportando..." : "Exportar Excel"}
           </button>
+          ) : null}
         </div>
       </div>
 
@@ -553,6 +579,7 @@ export default function LogisticaControlDocumentarioTab() {
                         </button>
                         {!item.confirmado ? (
                           <>
+                            {canEditar ? (
                             <button
                               type="button"
                               title="Editar"
@@ -564,6 +591,8 @@ export default function LogisticaControlDocumentarioTab() {
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
+                            ) : null}
+                            {canEliminar ? (
                             <button
                               type="button"
                               title="Eliminar"
@@ -577,6 +606,8 @@ export default function LogisticaControlDocumentarioTab() {
                                 <Trash2 className="h-3.5 w-3.5" />
                               )}
                             </button>
+                            ) : null}
+                            {canConfirmar ? (
                             <button
                               type="button"
                               title="Confirmar"
@@ -585,6 +616,7 @@ export default function LogisticaControlDocumentarioTab() {
                             >
                               <Unlock className="h-3.5 w-3.5" />
                             </button>
+                            ) : null}
                           </>
                         ) : (
                           <span
@@ -671,6 +703,7 @@ export default function LogisticaControlDocumentarioTab() {
       {detailId ? (
         <DocumentoDetalleModal
           documentoId={detailId}
+          canDescargarAdjuntos={canDescargarAdjuntos}
           onClose={() => setDetailId(null)}
         />
       ) : null}
@@ -678,6 +711,8 @@ export default function LogisticaControlDocumentarioTab() {
       {editorOpen ? (
         <EditorModal
           documentoId={editingId}
+          canSubirAdjuntos={canSubirAdjuntos}
+          canEliminarAdjuntos={canEliminarAdjuntos}
           onClose={() => {
             setEditorOpen(false);
             setEditingId(null);
@@ -771,10 +806,14 @@ function DialogShell({
 
 function EditorModal({
   documentoId,
+  canSubirAdjuntos,
+  canEliminarAdjuntos,
   onClose,
   onSaved,
 }: {
   documentoId: string | null;
+  canSubirAdjuntos: boolean;
+  canEliminarAdjuntos: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1413,6 +1452,7 @@ function EditorModal({
             <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
               Archivos / fotos (máx. 5, 10 MB c/u)
             </span>
+            {canSubirAdjuntos ? (
             <input
               type="file"
               multiple
@@ -1423,13 +1463,20 @@ function EditorModal({
                 e.target.value = "";
               }}
             />
+            ) : (
+              <p className="text-xs text-slate-500">
+                No tienes permiso para subir adjuntos.
+              </p>
+            )}
             <ul className="mt-2 space-y-1 text-xs text-slate-600">
               {existingAdjuntos.map((a) => (
                 <li key={a.id} className="flex items-center justify-between rounded border border-gray-100 px-2 py-1">
                   <span>{a.nombre_archivo} · {formatBytes(a.tamano_bytes)}</span>
+                  {canEliminarAdjuntos ? (
                   <button type="button" className="text-red-500" onClick={() => void removeExistingAdjunto(a.id)}>
                     Quitar
                   </button>
+                  ) : null}
                 </li>
               ))}
               {pendingFiles.map((f, i) => (

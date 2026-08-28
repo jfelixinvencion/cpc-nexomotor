@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { usePermisos } from "@/lib/auth/usePermisos";
 
 type Consumible = {
   id: number;
@@ -72,6 +73,9 @@ function formatSupabaseError(error: unknown, fallback = "Error desconocido") {
 }
 
 export default function ConsumiblesAdminDashboard() {
+  const { puede } = usePermisos();
+  const canCrear = puede("administracion", "consumibles", "crear");
+  const canEliminar = puede("administracion", "consumibles", "eliminar");
   const [items, setItems] = useState<Consumible[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -247,6 +251,7 @@ export default function ConsumiblesAdminDashboard() {
 
     setSaving(true);
 
+    // TODO(auth-enforced): consumibles (admin) escribe por supabase client; migrar a Route Handler.
     const { data: existing, error: existsError } = await supabase
       .from("consumibles")
       .select("id")
@@ -345,6 +350,7 @@ export default function ConsumiblesAdminDashboard() {
             </span>
           </p>
         </div>
+        {canCrear ? (
         <button
           type="button"
           onClick={openCreate}
@@ -353,6 +359,7 @@ export default function ConsumiblesAdminDashboard() {
           <Plus className="h-4 w-4" aria-hidden />
           Agregar SKU Consumible
         </button>
+        ) : null}
       </div>
 
       <label className="relative block max-w-xl">
@@ -415,6 +422,7 @@ export default function ConsumiblesAdminDashboard() {
                       {item.descripcion || "—"}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
+                      {canEliminar ? (
                       <button
                         type="button"
                         onClick={() => openDelete(item)}
@@ -424,6 +432,7 @@ export default function ConsumiblesAdminDashboard() {
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))

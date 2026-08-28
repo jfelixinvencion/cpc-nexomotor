@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 export type HerramientaRow = {
   id: number;
@@ -30,7 +31,15 @@ function mapRow(row: Record<string, unknown>): HerramientaRow {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "administracion",
+    "herramientas",
+    "ver"
+  );
+  if (denied) return denied;
+
   const { data, error } = await supabaseAdmin
     .from("herramientas")
     .select("*")
@@ -50,6 +59,14 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = await enforceIfRealSession(
+    request,
+    "administracion",
+    "herramientas",
+    "crear"
+  );
+  if (denied) return denied;
+
   try {
     const body = (await request.json()) as {
       codigo?: string;

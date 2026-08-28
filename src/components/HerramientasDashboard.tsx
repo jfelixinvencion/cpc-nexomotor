@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { usePermisos } from "@/lib/auth/usePermisos";
 
 export type Herramienta = {
   id: number;
@@ -92,6 +93,10 @@ function findCodigoForDescripcion(
 }
 
 export default function HerramientasDashboard() {
+  const { puede } = usePermisos();
+  const canCrear = puede("administracion", "herramientas", "crear");
+  const canEditar = puede("administracion", "herramientas", "editar");
+  const canEliminar = puede("administracion", "herramientas", "eliminar");
   const [items, setItems] = useState<Herramienta[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -261,6 +266,7 @@ export default function HerramientasDashboard() {
 
     setSaving(true);
 
+    // TODO(auth-enforced): el dashboard escribe por supabase client; migrar a /api/herramientas.
     if (editingId != null) {
       const { error: updateError } = await supabase
         .from("herramientas")
@@ -345,6 +351,7 @@ export default function HerramientasDashboard() {
             </span>
           </p>
         </div>
+        {canCrear ? (
         <button
           type="button"
           onClick={openCreate}
@@ -353,6 +360,7 @@ export default function HerramientasDashboard() {
           <Plus className="h-4 w-4" aria-hidden />
           Agregar
         </button>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -469,6 +477,7 @@ export default function HerramientasDashboard() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
+                        {canEditar ? (
                         <button
                           type="button"
                           onClick={() => openEdit(item)}
@@ -478,6 +487,8 @@ export default function HerramientasDashboard() {
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
+                        ) : null}
+                        {canEliminar ? (
                         <button
                           type="button"
                           onClick={() => openDeleteConfirm(item)}
@@ -487,6 +498,7 @@ export default function HerramientasDashboard() {
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

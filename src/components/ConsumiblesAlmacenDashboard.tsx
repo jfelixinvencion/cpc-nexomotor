@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 type HistorialConsumible = {
   id: number;
@@ -152,6 +153,11 @@ async function fetchAprobadoFlag(id: number) {
 }
 
 export default function ConsumiblesAlmacenDashboard() {
+  const { puede } = usePermisos();
+  const canCrear = puede("almacen", "consumibles", "crear");
+  const canEditar = puede("almacen", "consumibles", "editar");
+  const canEliminar = puede("almacen", "consumibles", "eliminar");
+  const canVistoBueno = puede("almacen", "consumibles", "visto_bueno");
   const [historial, setHistorial] = useState<HistorialConsumible[]>([]);
   const [activos, setActivos] = useState<PlanillaActivo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -673,6 +679,7 @@ export default function ConsumiblesAlmacenDashboard() {
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-base font-bold text-foreground">Consumibles</h2>
+        {canCrear ? (
         <button
           type="button"
           onClick={openCreateModal}
@@ -681,6 +688,7 @@ export default function ConsumiblesAlmacenDashboard() {
           <Plus className="h-4 w-4" aria-hidden />
           Agregar salida
         </button>
+        ) : null}
       </div>
 
       {error ? (
@@ -781,27 +789,30 @@ export default function ConsumiblesAlmacenDashboard() {
                             <button
                               type="button"
                               onClick={() => void openEditModal(item)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-100 hover:text-rose-700"
+                              disabled={!canEditar}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-100 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Editar ${item.codigo}`}
-                              title="Editar"
+                              title={canEditar ? "Editar" : NO_PERMISO_TITLE}
                             >
                               <Pencil className="h-4 w-4" />
                             </button>
                             <button
                               type="button"
                               onClick={() => openDeleteConfirm(item)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                              disabled={!canEliminar}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Eliminar ${item.codigo}`}
-                              title="Eliminar"
+                              title={canEliminar ? "Eliminar" : NO_PERMISO_TITLE}
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
                             <button
                               type="button"
                               onClick={() => openVbConfirm(item)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-700"
+                              disabled={!canVistoBueno}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Visto bueno ${item.codigo}`}
-                              title="Visto Bueno"
+                              title={canVistoBueno ? "Visto Bueno" : NO_PERMISO_TITLE}
                             >
                               <CheckCircle2 className="h-4 w-4" />
                             </button>

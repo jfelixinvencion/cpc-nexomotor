@@ -7,6 +7,7 @@ import {
 } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
 import { isUuid } from "@/lib/control-documentario/parse";
+import { enforceIfRealSession } from "@/lib/auth/require";
 import {
   buildStoragePath,
   removeStoragePaths,
@@ -19,7 +20,15 @@ import type { AdjuntoRow } from "@/lib/control-documentario/db";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "adjuntos_descargar"
+  );
+  if (denied) return denied;
+
   const { id } = await context.params;
   if (!isUuid(id)) return jsonError("ID inválido.", 400);
 
@@ -54,6 +63,14 @@ export async function GET(_request: NextRequest, context: RouteContext) {
 }
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "adjuntos_subir"
+  );
+  if (denied) return denied;
+
   const { id } = await context.params;
   if (!isUuid(id)) return jsonError("ID inválido.", 400);
 

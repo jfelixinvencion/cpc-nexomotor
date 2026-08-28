@@ -121,10 +121,12 @@ export default function DocumentoDetalleModal({
   documentoId,
   onClose,
   modoSoloLectura = false,
+  canDescargarAdjuntos = true,
 }: {
   documentoId: string;
   onClose: () => void;
   modoSoloLectura?: boolean;
+  canDescargarAdjuntos?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -222,6 +224,7 @@ export default function DocumentoDetalleModal({
             <DetalleBody
               doc={doc}
               xmlLoading={xmlLoading}
+              canDescargarAdjuntos={canDescargarAdjuntos}
               onPreviewImage={(a) => setPreview({ kind: "image", adjunto: a })}
               onPreviewXml={(a) => void openXmlPreview(a)}
               onPreviewHtml={(a) => setPreview({ kind: "html", adjunto: a })}
@@ -245,6 +248,7 @@ export default function DocumentoDetalleModal({
               className="max-h-[85vh] rounded-lg object-contain"
             />
             <div className="mt-2 flex justify-end gap-2">
+              {canDescargarAdjuntos ? (
               <a
                 href={preview.adjunto.signed_url}
                 download={preview.adjunto.nombre_archivo}
@@ -252,6 +256,7 @@ export default function DocumentoDetalleModal({
               >
                 Descargar
               </a>
+              ) : null}
               <button
                 type="button"
                 className="rounded bg-white px-3 py-1 text-sm"
@@ -275,6 +280,7 @@ export default function DocumentoDetalleModal({
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="truncate text-sm font-medium">{preview.adjunto.nombre_archivo}</p>
               <div className="flex shrink-0 gap-2">
+                {canDescargarAdjuntos ? (
                 <a
                   href={preview.adjunto.signed_url}
                   download={preview.adjunto.nombre_archivo}
@@ -282,6 +288,7 @@ export default function DocumentoDetalleModal({
                 >
                   Descargar
                 </a>
+                ) : null}
                 <button
                   type="button"
                   className="rounded border border-gray-200 px-3 py-1 text-sm"
@@ -317,6 +324,7 @@ export default function DocumentoDetalleModal({
                 >
                   Abrir pestaña
                 </a>
+                {canDescargarAdjuntos ? (
                 <a
                   href={preview.adjunto.signed_url}
                   download={preview.adjunto.nombre_archivo}
@@ -324,6 +332,7 @@ export default function DocumentoDetalleModal({
                 >
                   Descargar
                 </a>
+                ) : null}
                 <button
                   type="button"
                   className="rounded border border-gray-200 px-3 py-1 text-sm"
@@ -349,12 +358,14 @@ export default function DocumentoDetalleModal({
 function DetalleBody({
   doc,
   xmlLoading,
+  canDescargarAdjuntos,
   onPreviewImage,
   onPreviewXml,
   onPreviewHtml,
 }: {
   doc: DocumentoDetalle;
   xmlLoading: boolean;
+  canDescargarAdjuntos: boolean;
   onPreviewImage: (adjunto: DocumentoAdjunto) => void;
   onPreviewXml: (adjunto: DocumentoAdjunto) => void;
   onPreviewHtml: (adjunto: DocumentoAdjunto) => void;
@@ -447,6 +458,7 @@ function DetalleBody({
                   />
                   <div className="flex items-center justify-between px-2 py-1 text-[11px]">
                     <span className="truncate">{a.nombre_archivo}</span>
+                    {canDescargarAdjuntos ? (
                     <a
                       href={a.signed_url}
                       download={a.nombre_archivo}
@@ -455,6 +467,7 @@ function DetalleBody({
                     >
                       Descargar
                     </a>
+                    ) : null}
                   </div>
                 </button>
               ) : (
@@ -462,6 +475,7 @@ function DetalleBody({
                   key={a.id}
                   adjunto={a}
                   xmlLoading={xmlLoading}
+                  canDescargarAdjuntos={canDescargarAdjuntos}
                   onPreviewXml={onPreviewXml}
                   onPreviewHtml={onPreviewHtml}
                 />
@@ -477,11 +491,13 @@ function DetalleBody({
 function DocumentoCard({
   adjunto,
   xmlLoading,
+  canDescargarAdjuntos,
   onPreviewXml,
   onPreviewHtml,
 }: {
   adjunto: DocumentoAdjunto;
   xmlLoading: boolean;
+  canDescargarAdjuntos: boolean;
   onPreviewXml: (adjunto: DocumentoAdjunto) => void;
   onPreviewHtml: (adjunto: DocumentoAdjunto) => void;
 }) {
@@ -524,6 +540,7 @@ function DocumentoCard({
           Ver
         </a>
       )}
+      {canDescargarAdjuntos ? (
       <a
         href={adjunto.signed_url}
         download={adjunto.nombre_archivo}
@@ -532,6 +549,7 @@ function DocumentoCard({
       >
         <Download className="h-4 w-4" />
       </a>
+      ) : null}
     </div>
   );
 }

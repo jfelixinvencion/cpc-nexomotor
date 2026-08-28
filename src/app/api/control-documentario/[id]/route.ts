@@ -13,6 +13,7 @@ import {
   type DocumentoRow,
 } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
+import { enforceIfRealSession } from "@/lib/auth/require";
 import { isUuid, parseDocumentoPayload, resumenDescripcionItems, TEXTO_SIN_OC, type DocumentoParsed } from "@/lib/control-documentario/parse";
 import {
   removeStoragePaths,
@@ -27,7 +28,15 @@ async function parseId(context: RouteContext) {
   return id;
 }
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "ver"
+  );
+  if (denied) return denied;
+
   const id = await parseId(context);
   if (!id) return jsonError("ID inválido.", 400);
 
@@ -96,6 +105,14 @@ function headerUpdate(parsed: DocumentoParsed, descripcion: string | null) {
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "editar"
+  );
+  if (denied) return denied;
+
   const id = await parseId(context);
   if (!id) return jsonError("ID inválido.", 400);
 
@@ -213,7 +230,15 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "eliminar"
+  );
+  if (denied) return denied;
+
   const id = await parseId(context);
   if (!id) return jsonError("ID inválido.", 400);
 
