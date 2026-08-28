@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 export async function POST(request: NextRequest) {
+  const target = request.nextUrl.searchParams.get("target");
+  if (target === "inversa") {
+    const denied = await enforceIfRealSession(
+      request,
+      "logistica",
+      "inversa",
+      "sincronizar"
+    );
+    if (denied) return denied;
+  }
+  // TODO(auth-enforced): Control OT sync (sin target) no tiene permiso en el catálogo.
+
   const secret = process.env.SYNC_TRIGGER_SECRET;
   if (!secret) {
     return NextResponse.json(
@@ -9,7 +22,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const target = request.nextUrl.searchParams.get("target");
   const syncPath =
     target === "inversa"
       ? "/api/logistica/sync-inversa"

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { enforceIfRealSession } from "@/lib/auth/require";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -9,6 +10,14 @@ function parseId(raw: string) {
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "administracion",
+    "herramientas",
+    "editar"
+  );
+  if (denied) return denied;
+
   const { id: rawId } = await context.params;
   const id = parseId(rawId);
   if (!id) {
@@ -63,7 +72,15 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "administracion",
+    "herramientas",
+    "eliminar"
+  );
+  if (denied) return denied;
+
   const { id: rawId } = await context.params;
   const id = parseId(rawId);
   if (!id) {

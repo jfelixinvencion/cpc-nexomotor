@@ -6,6 +6,7 @@ import { FileSpreadsheet, Loader2, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import DocumentoDetalleModal from "@/components/control-documentario/DocumentoDetalleModal";
 import { supabase } from "@/lib/supabase/client";
+import { usePermisos } from "@/lib/auth/usePermisos";
 
 const COMPRAS_PAGE_SIZE = 100;
 const COMPRAS_EXPORT_PAGE_SIZE = 500;
@@ -233,9 +234,11 @@ function TruncCell({
 const DocStatusDot = memo(function DocStatusDot({
   estado,
   onOpen,
+  canOpen,
 }: {
   estado: LineaDocEstado | undefined;
   onOpen: (documentoId: string) => void;
+  canOpen: boolean;
 }) {
   if (estado === undefined) {
     return (
@@ -258,10 +261,13 @@ const DocStatusDot = memo(function DocStatusDot({
   return (
     <button
       type="button"
-      title="Ver documento"
+      title={canOpen ? "Ver documento" : "No tienes permiso para esta acción"}
       aria-label="Ver documento"
-      onClick={() => onOpen(estado.documento_id)}
-      className="inline-flex h-6 w-6 items-center justify-center rounded-full hover:bg-emerald-50"
+      disabled={!canOpen}
+      onClick={() => {
+        if (canOpen) onOpen(estado.documento_id);
+      }}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-full hover:bg-emerald-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
     >
       <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500" />
     </button>
@@ -283,6 +289,15 @@ function applyPrecioColumnFormat(worksheet: XLSX.WorkSheet) {
 }
 
 export default function LogisticaComprasTab() {
+  const { puede } = usePermisos();
+  const canExportar = puede("logistica", "compras", "exportar");
+  const canSincronizar = puede("logistica", "compras", "sincronizar");
+  const canVerDocumentos = puede("logistica", "compras", "ver_documentos");
+  const canDescargarAdjuntos = puede(
+    "logistica",
+    "control_documentario",
+    "adjuntos_descargar"
+  );
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
@@ -489,6 +504,7 @@ export default function LogisticaComprasTab() {
   }, []);
 
   const fetchEstadoLineas = useCallback(async (keys: string[]) => {
+    if (!canVerDocumentos) return;
     const unique = Array.from(new Set(keys)).filter((key) => {
       if (key in lineaEstadoRef.current) return false;
       if (pendingLineasRef.current.has(key)) return false;
@@ -535,7 +551,7 @@ export default function LogisticaComprasTab() {
     } finally {
       for (const key of unique) pendingLineasRef.current.delete(key);
     }
-  }, []);
+  }, [canVerDocumentos]);
 
   useEffect(() => {
     if (lastVirtualIndex < 0 || items.length === 0) return;
@@ -762,6 +778,7 @@ export default function LogisticaComprasTab() {
         </div>
 
         <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+          {canExportar ? (
           <button
             type="button"
             onClick={() => void handleExportExcel()}
@@ -786,6 +803,8 @@ export default function LogisticaComprasTab() {
               </>
             )}
           </button>
+          ) : null}
+          {canSincronizar ? (
           <button
             type="button"
             onClick={() => void handleSyncOc()}
@@ -801,6 +820,7 @@ export default function LogisticaComprasTab() {
               "🔄 Sincronizar OC"
             )}
           </button>
+          ) : null}
         </div>
       </div>
 
@@ -933,6 +953,7 @@ export default function LogisticaComprasTab() {
                           <DocStatusDot
                             estado={estadoDoc}
                             onOpen={openDocumento}
+                            canOpen={canVerDocumentos}
                           />
                         </td>
                         <td className="w-[100px] px-1.5 py-2 font-mono text-[11px] font-semibold text-accent">
@@ -1009,6 +1030,7 @@ export default function LogisticaComprasTab() {
         <DocumentoDetalleModal
           documentoId={detailDocumentoId}
           modoSoloLectura
+          canDescargarAdjuntos={canDescargarAdjuntos}
           onClose={() => setDetailDocumentoId(null)}
         />
       ) : null}

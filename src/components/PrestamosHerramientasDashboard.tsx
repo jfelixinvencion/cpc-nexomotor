@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 type PrestamosSubTab = "disponibles" | "pendientes" | "historial";
 
@@ -155,6 +156,9 @@ function mapHerramienta(row: Record<string, unknown>): HerramientaDisponible {
 }
 
 export default function PrestamosHerramientasDashboard() {
+  const { puede } = usePermisos();
+  const canPrestar = puede("almacen", "herramientas", "prestar");
+  const canDevolver = puede("almacen", "herramientas", "devolver");
   const [subTab, setSubTab] = useState<PrestamosSubTab>("disponibles");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -722,6 +726,7 @@ export default function PrestamosHerramientasDashboard() {
                         {item.cantidad}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
+                        {canPrestar ? (
                         <button
                           type="button"
                           onClick={() => openRetiro(item)}
@@ -729,6 +734,11 @@ export default function PrestamosHerramientasDashboard() {
                         >
                           Retirar
                         </button>
+                        ) : (
+                          <span className="text-xs text-slate-400" title={NO_PERMISO_TITLE}>
+                            —
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -795,6 +805,7 @@ export default function PrestamosHerramientasDashboard() {
                           {formatDateTime(item.fecha_hora_retiro)}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-right">
+                          {canDevolver ? (
                           <button
                             type="button"
                             onClick={() => openDevolver(item)}
@@ -803,6 +814,11 @@ export default function PrestamosHerramientasDashboard() {
                             <Undo2 className="h-3.5 w-3.5" aria-hidden />
                             Devolver
                           </button>
+                          ) : (
+                            <span className="text-xs text-slate-400" title={NO_PERMISO_TITLE}>
+                              —
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );

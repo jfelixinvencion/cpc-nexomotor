@@ -76,6 +76,36 @@ export async function requireSession(
   return payload;
 }
 
+/**
+ * Si hay cookie de sesión real, exige el permiso.
+ * Sin cookie (login mock o llamadas antiguas sin sesión server-side) no bloquea.
+ * TODO(auth-enforced): cuando AUTH_MODE=enforced, exigir sesión en todas las rutas de negocio.
+ */
+export async function enforceIfRealSession(
+  req: NextRequest,
+  modulo: AuthModulo,
+  pestana: AuthPestana,
+  accion: AuthAccion
+): Promise<NextResponse | null> {
+  const token = readSessionCookieFromRequest(req);
+  if (!token) return null;
+  try {
+    const session = await requireSession(req);
+    await requirePermission(session, modulo, pestana, accion);
+    return null;
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof HttpError) {
+      return authErrorResponse(err);
+    }
+    const message = err instanceof Error ? err.message : "Error desconocido";
+    console.error("[auth] enforceIfRealSession:", message);
+    return NextResponse.json(
+      { success: false, error: "Error interno." },
+      { status: 500 }
+    );
+  }
+}
+
 export async function requirePermission(
   session: SessionPayload,
   modulo: AuthModulo,

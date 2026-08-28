@@ -868,6 +868,8 @@ function failureJson(
 }
 
 export async function POST(request: NextRequest) {
+  // TODO(auth-enforced): esta ruta se llama con x-sync-secret desde trigger-sync.
+  // El permiso inversa/sincronizar se aplica en /api/logistica/trigger-sync.
   const entry_date_range = computeEntryDateRange();
 
   try {

@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { usePermisos } from "@/lib/auth/usePermisos";
 
 export type PlanillaRow = {
   id: number;
@@ -122,6 +123,10 @@ function estadoBadgeClass(estado: string) {
 }
 
 export default function PlanillaDashboard() {
+  const { puede } = usePermisos();
+  const canCrear = puede("administracion", "planilla", "crear");
+  const canEditar = puede("administracion", "planilla", "editar");
+  const canEliminar = puede("administracion", "planilla", "eliminar");
   const [items, setItems] = useState<PlanillaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -272,6 +277,7 @@ export default function PlanillaDashboard() {
 
     setSaving(true);
 
+    // TODO(auth-enforced): planilla escribe por supabase client; migrar a Route Handler.
     if (editingId != null) {
       const { error: updateError } = await supabase
         .from("planilla")
@@ -348,6 +354,7 @@ export default function PlanillaDashboard() {
             </span>
           </p>
         </div>
+        {canCrear ? (
         <button
           type="button"
           onClick={openCreate}
@@ -356,6 +363,7 @@ export default function PlanillaDashboard() {
           <Plus className="h-4 w-4" aria-hidden />
           Agregar
         </button>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -481,6 +489,7 @@ export default function PlanillaDashboard() {
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
+                        {canEditar ? (
                         <button
                           type="button"
                           onClick={() => openEdit(item)}
@@ -490,6 +499,8 @@ export default function PlanillaDashboard() {
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
+                        ) : null}
+                        {canEliminar ? (
                         <button
                           type="button"
                           onClick={() => openDeleteConfirm(item)}
@@ -499,6 +510,7 @@ export default function PlanillaDashboard() {
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

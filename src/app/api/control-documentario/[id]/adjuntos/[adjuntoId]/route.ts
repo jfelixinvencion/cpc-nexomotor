@@ -7,11 +7,20 @@ import {
 } from "@/lib/control-documentario/db";
 import { jsonError, jsonOk, logServerError } from "@/lib/control-documentario/http";
 import { isUuid } from "@/lib/control-documentario/parse";
+import { enforceIfRealSession } from "@/lib/auth/require";
 import { removeStoragePaths } from "@/lib/control-documentario/storage";
 
 type RouteContext = { params: Promise<{ id: string; adjuntoId: string }> };
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const denied = await enforceIfRealSession(
+    request,
+    "logistica",
+    "control_documentario",
+    "adjuntos_eliminar"
+  );
+  if (denied) return denied;
+
   const { id, adjuntoId } = await context.params;
   if (!isUuid(id) || !isUuid(adjuntoId)) {
     return jsonError("ID inválido.", 400);

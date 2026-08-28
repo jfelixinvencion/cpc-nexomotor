@@ -28,6 +28,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 import LogisticaComprasTab from "@/components/LogisticaComprasTab";
 import LogisticaControlDocumentarioTab from "@/components/LogisticaControlDocumentarioTab";
+import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 const INVERSA_PAGE_SIZE = 200;
 const INVERSA_ROW_HEIGHT = 48;
@@ -444,6 +445,20 @@ function pendienteFormPayload(form: PendienteForm) {
 
 export default function LogisticaDashboard() {
   const [tab, setTab] = useState<LogisticaTab>("control-ot");
+  const { puede } = usePermisos();
+  const canVerInversa = puede("logistica", "inversa", "ver");
+  const canVerCompras = puede("logistica", "compras", "ver");
+  const canVerDocumentario = puede("logistica", "control_documentario", "ver");
+  const canExportInversa = puede("logistica", "inversa", "exportar");
+  const canSyncInversa = puede("logistica", "inversa", "sincronizar");
+  const canEditarInversa = puede("logistica", "inversa", "editar");
+  const canCertify = puede("logistica", "inversa", "certificar");
+
+  useEffect(() => {
+    if (tab === "inversa" && !canVerInversa) setTab("control-ot");
+    else if (tab === "compras" && !canVerCompras) setTab("control-ot");
+    else if (tab === "documentario" && !canVerDocumentario) setTab("control-ot");
+  }, [tab, canVerInversa, canVerCompras, canVerDocumentario]);
 
   // --- Control OT ---
   const [items, setItems] = useState<DetalleOtPendiente[]>([]);
@@ -524,8 +539,7 @@ export default function LogisticaDashboard() {
   const inversaFetchingMoreRef = useRef(false);
   const planillaLoadedRef = useRef(false);
 
-  // TODO: restringir Certificar a user.role === 'almacenero' cuando exista roles en contexto.
-  const canCertify = true;
+  // TODO: Control OT no está en el catálogo de permisos de esta fase.
 
   const fetchDetalle = useCallback(async () => {
     setLoading(true);
@@ -1481,6 +1495,7 @@ export default function LogisticaDashboard() {
             <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
           ) : null}
         </button>
+        {canVerInversa ? (
         <button
           type="button"
           role="tab"
@@ -1494,6 +1509,8 @@ export default function LogisticaDashboard() {
             <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
           ) : null}
         </button>
+        ) : null}
+        {canVerCompras ? (
         <button
           type="button"
           role="tab"
@@ -1507,6 +1524,8 @@ export default function LogisticaDashboard() {
             <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
           ) : null}
         </button>
+        ) : null}
+        {canVerDocumentario ? (
         <button
           type="button"
           role="tab"
@@ -1520,6 +1539,7 @@ export default function LogisticaDashboard() {
             <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
           ) : null}
         </button>
+        ) : null}
       </div>
 
       {tab === "control-ot" ? (
@@ -1816,6 +1836,7 @@ export default function LogisticaDashboard() {
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+              {canExportInversa ? (
               <button
                 type="button"
                 onClick={handleExportInversaExcel}
@@ -1828,6 +1849,8 @@ export default function LogisticaDashboard() {
                 />
                 Exportar Excel
               </button>
+              ) : null}
+              {canSyncInversa ? (
               <button
                 type="button"
                 onClick={() => void handleSyncInversa()}
@@ -1843,6 +1866,7 @@ export default function LogisticaDashboard() {
                   "🔄 Sincronizar Historial"
                 )}
               </button>
+              ) : null}
             </div>
           </div>
           ) : (
@@ -1873,6 +1897,7 @@ export default function LogisticaDashboard() {
                 ) : null}
               </div>
             </label>
+            {canEditarInversa ? (
             <button
               type="button"
               onClick={startAddPendiente}
@@ -1881,6 +1906,7 @@ export default function LogisticaDashboard() {
               <Plus className="h-3.5 w-3.5" aria-hidden />
               Agregar Pendiente
             </button>
+            ) : null}
           </div>
           )}
 
@@ -2009,6 +2035,7 @@ export default function LogisticaDashboard() {
                             isCertifying={isCertifying}
                             isClearing={isClearing}
                             isSelling={sellingId === rowId}
+                            canEditar={canEditarInversa}
                             canCertify={canCertify}
                             onStartEdit={() => startEditInversa(item)}
                             onLimpiar={() => void handleLimpiarInversa(rowId)}
@@ -2108,6 +2135,7 @@ export default function LogisticaDashboard() {
                         key={item.id}
                         item={item}
                         isDeleting={deletingPendienteId === item.id}
+                        canEditar={canEditarInversa}
                         onStartEdit={() => startEditPendiente(item)}
                         onDelete={() => void handleDeletePendiente(item.id)}
                       />
@@ -2167,8 +2195,10 @@ export default function LogisticaDashboard() {
         </div>
       ) : null}
 
-      {tab === "compras" ? <LogisticaComprasTab /> : null}
-      {tab === "documentario" ? <LogisticaControlDocumentarioTab /> : null}
+      {tab === "compras" && canVerCompras ? <LogisticaComprasTab /> : null}
+      {tab === "documentario" && canVerDocumentario ? (
+        <LogisticaControlDocumentarioTab />
+      ) : null}
     </div>
   );
 }
@@ -2288,6 +2318,7 @@ function FragmentRow({
   isCertifying,
   isClearing,
   isSelling,
+  canEditar,
   canCertify,
   onStartEdit,
   onLimpiar,
@@ -2299,6 +2330,7 @@ function FragmentRow({
   isCertifying: boolean;
   isClearing: boolean;
   isSelling: boolean;
+  canEditar: boolean;
   canCertify: boolean;
   onStartEdit: () => void;
   onLimpiar: () => void;
@@ -2384,8 +2416,8 @@ function FragmentRow({
                 <button
                   type="button"
                   onClick={onVenderChatarrero}
-                  disabled={isSelling}
-                  title="Vendido al chatarrero"
+                  disabled={isSelling || !canEditar}
+                  title={canEditar ? "Vendido al chatarrero" : NO_PERMISO_TITLE}
                   aria-label="Vendido al chatarrero"
                   className={`${ICON_BTN} border-green-800/30 bg-green-50 text-green-800 hover:bg-green-100`}
                 >
@@ -2401,7 +2433,8 @@ function FragmentRow({
                 <button
                   type="button"
                   onClick={onStartEdit}
-                  title="Editar"
+                  disabled={!canEditar}
+                  title={canEditar ? "Editar" : NO_PERMISO_TITLE}
                   aria-label="Editar"
                   className={`${ICON_BTN} border-gray-200 bg-white text-slate-600 hover:bg-slate-50`}
                 >
@@ -2410,8 +2443,8 @@ function FragmentRow({
                 <button
                   type="button"
                   onClick={onLimpiar}
-                  disabled={isClearing || isCertifying}
-                  title="Limpiar"
+                  disabled={isClearing || isCertifying || !canEditar}
+                  title={canEditar ? "Limpiar" : NO_PERMISO_TITLE}
                   aria-label="Limpiar"
                   className={`${ICON_BTN} border-red-200 bg-red-50 text-red-500 hover:bg-red-100`}
                 >
@@ -2878,11 +2911,13 @@ function PendienteModal({
 function PendienteRow({
   item,
   isDeleting,
+  canEditar,
   onStartEdit,
   onDelete,
 }: {
   item: LogisticaInversaPendienteRow;
   isDeleting: boolean;
+  canEditar: boolean;
   onStartEdit: () => void;
   onDelete: () => void;
 }) {
@@ -2925,7 +2960,8 @@ function PendienteRow({
           <button
             type="button"
             onClick={onStartEdit}
-            title="Editar"
+            disabled={!canEditar}
+            title={canEditar ? "Editar" : NO_PERMISO_TITLE}
             aria-label="Editar"
             className={`${ICON_BTN} border-gray-200 bg-white text-slate-600 hover:bg-slate-50`}
           >
@@ -2934,8 +2970,8 @@ function PendienteRow({
           <button
             type="button"
             onClick={onDelete}
-            disabled={isDeleting}
-            title="Eliminar"
+            disabled={isDeleting || !canEditar}
+            title={canEditar ? "Eliminar" : NO_PERMISO_TITLE}
             aria-label="Eliminar"
             className={`${ICON_BTN} border-red-200 bg-red-50 text-red-500 hover:bg-red-100`}
           >

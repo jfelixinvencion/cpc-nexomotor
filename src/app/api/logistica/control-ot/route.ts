@@ -5,6 +5,7 @@ const SELECT_COLUMNS =
   "ot_numero,vehiculo_modelo,vehiculo_placa,linea_codigo,linea_descripcion,linea_cantidad,linea_precio_unitario_pen,linea_fecha_entrega,linea_tipo,ot_tipo_operacion,ot_status,linea_estado";
 
 export async function GET() {
+  // TODO(auth-enforced): Control OT no tiene permiso "ver" en el catálogo; no bloquear en esta fase.
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 

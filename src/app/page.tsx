@@ -24,7 +24,11 @@ import ConsumiblesAlmacenDashboard from "@/components/ConsumiblesAlmacenDashboar
 import LogisticaDashboard from "@/components/LogisticaDashboard";
 import PerfilesDashboard from "@/components/PerfilesDashboard";
 import UsuariosDashboard from "@/components/UsuariosDashboard";
-import type { PermisoItem } from "@/lib/auth/permissions";
+import {
+  AUTH_CHANGED_EVENT,
+  invalidatePermisosCache,
+  usePermisos,
+} from "@/lib/auth/usePermisos";
 
 type View =
   | "landing"
@@ -588,6 +592,35 @@ function DashboardView({
 
 function WarehouseView() {
   const [tab, setTab] = useState<WarehouseTab>("herramientas");
+  const { cargando, puede } = usePermisos();
+  const canHerramientas = puede("almacen", "herramientas", "ver");
+  const canConsumibles = puede("almacen", "consumibles", "ver");
+
+  useEffect(() => {
+    if (cargando) return;
+    if (tab === "herramientas" && !canHerramientas && canConsumibles) {
+      setTab("consumibles");
+    } else if (tab === "consumibles" && !canConsumibles && canHerramientas) {
+      setTab("herramientas");
+    }
+  }, [cargando, tab, canHerramientas, canConsumibles]);
+
+  const warehouseTabs = (
+    [
+      {
+        id: "herramientas" as const,
+        label: "Herramientas",
+        icon: Wrench,
+        visible: canHerramientas,
+      },
+      {
+        id: "consumibles" as const,
+        label: "Consumibles",
+        icon: Package,
+        visible: canConsumibles,
+      },
+    ] as const
+  ).filter((item) => item.visible);
 
   return (
     <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
@@ -610,12 +643,7 @@ function WarehouseView() {
           aria-label="Secciones de almacén"
           className="flex border-b border-border bg-slate-50/80"
         >
-          {(
-            [
-              { id: "herramientas", label: "Herramientas", icon: Wrench },
-              { id: "consumibles", label: "Consumibles", icon: Package },
-            ] as const
-          ).map((item) => {
+          {warehouseTabs.map((item) => {
             const selected = tab === item.id;
             const Icon = item.icon;
             return (
@@ -642,84 +670,55 @@ function WarehouseView() {
         </div>
 
         <div role="tabpanel" className="p-2 sm:p-3">
-          {tab === "herramientas" ? (
+          {!cargando && warehouseTabs.length === 0 ? (
+            <p className="px-3 py-8 text-center text-sm text-muted">
+              No tiene permiso para ver las pestañas de almacén.
+            </p>
+          ) : tab === "herramientas" && canHerramientas ? (
             <PrestamosHerramientasDashboard />
-          ) : (
+          ) : tab === "consumibles" && canConsumibles ? (
             <ConsumiblesAlmacenDashboard />
-          )}
+          ) : null}
         </div>
       </div>
     </section>
   );
 }
 
-type AdminMeState =
-  | { status: "loading" }
-  | { status: "legacy" }
-  | { status: "expired" }
-  | { status: "error"; message: string }
-  | { status: "ok"; permisos: PermisoItem[] };
-
 function AdministracionView({ onBack }: { onBack: () => void }) {
   const [tab, setTab] = useState<AdminTab>("planilla");
-  const [me, setMe] = useState<AdminMeState>({ status: "loading" });
+  const { cargando, autenticado, source, permisos, puede } = usePermisos();
+
+  const sessionOk = source === "real" && autenticado;
+  const sessionExpired = source === "real" && !autenticado && !cargando;
+  const isLegacy = source === "mock";
+
+  const adminTabs = (
+    [
+      { id: "planilla", label: "PLANILLA", icon: BookOpen, pestana: "planilla" },
+      {
+        id: "herramientas",
+        label: "HERRAMIENTAS",
+        icon: Wrench,
+        pestana: "herramientas",
+      },
+      {
+        id: "consumibles",
+        label: "CONSUMIBLES",
+        icon: Package,
+        pestana: "consumibles",
+      },
+      { id: "perfiles", label: "PERFILES", icon: Shield, pestana: "perfiles" },
+      { id: "usuarios", label: "USUARIOS", icon: Users, pestana: "usuarios" },
+    ] as const
+  ).filter((item) => puede("administracion", item.pestana, "ver"));
 
   useEffect(() => {
-    const session = readSession();
-    if (session?.source !== "real") {
-      setMe({ status: "legacy" });
-      return;
+    if (cargando) return;
+    if (adminTabs.length > 0 && !adminTabs.some((item) => item.id === tab)) {
+      setTab(adminTabs[0].id);
     }
-
-    let cancelled = false;
-    setMe({ status: "loading" });
-
-    void (async () => {
-      try {
-        const res = await fetch("/api/auth/me", {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        if (cancelled) return;
-        if (res.status === 401) {
-          setMe({ status: "expired" });
-          return;
-        }
-        const json = (await res.json().catch(() => ({}))) as {
-          success?: boolean;
-          error?: string;
-          data?: { permisos?: PermisoItem[] };
-        };
-        if (!res.ok || json.success === false) {
-          setMe({
-            status: "error",
-            message: json.error || "No se pudo verificar la sesión.",
-          });
-          return;
-        }
-        setMe({
-          status: "ok",
-          permisos: Array.isArray(json.data?.permisos) ? json.data.permisos : [],
-        });
-      } catch {
-        if (!cancelled) {
-          setMe({
-            status: "error",
-            message: "No se pudo verificar la sesión.",
-          });
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const sessionOk = me.status === "ok";
-  const sessionExpired = me.status === "expired";
-  const isLegacy = me.status === "legacy";
-  const permisos = me.status === "ok" ? me.permisos : [];
+  }, [cargando, adminTabs, tab]);
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-12">
@@ -759,15 +758,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
           aria-label="Secciones de administración"
           className="flex flex-wrap border-b border-border bg-slate-50/80"
         >
-          {(
-            [
-              { id: "planilla", label: "PLANILLA", icon: BookOpen },
-              { id: "herramientas", label: "HERRAMIENTAS", icon: Wrench },
-              { id: "consumibles", label: "CONSUMIBLES", icon: Package },
-              { id: "perfiles", label: "PERFILES", icon: Shield },
-              { id: "usuarios", label: "USUARIOS", icon: Users },
-            ] as const
-          ).map((item) => {
+          {adminTabs.map((item) => {
             const selected = tab === item.id;
             const Icon = item.icon;
             return (
@@ -794,14 +785,10 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
         </div>
 
         <div role="tabpanel" className="p-5 sm:p-8">
-          {me.status === "error" &&
-          (tab === "perfiles" || tab === "usuarios") ? (
-            <div
-              role="alert"
-              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-            >
-              {me.message}
-            </div>
+          {!cargando && adminTabs.length === 0 ? (
+            <p className="text-sm text-muted">
+              No tiene permiso para ver las pestañas de administración.
+            </p>
           ) : tab === "planilla" ? (
             <PlanillaDashboard />
           ) : tab === "herramientas" ? (
@@ -886,11 +873,15 @@ export default function Home() {
     setIsAuthenticated(true);
     setView("dashboard");
     writeView("dashboard");
+    invalidatePermisosCache();
+    window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
   }
 
   function handleLogout() {
     clearSessionStorage();
     void fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    invalidatePermisosCache();
+    window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
     setIsAuthenticated(false);
     setView("login");
   }
