@@ -32,6 +32,7 @@ export const AUTH_ACCIONES = [
   "devolver",
   "visto_bueno",
   "desactivar",
+  "validar_contabilidad",
 ] as const;
 
 export type AuthModulo = (typeof AUTH_MODULOS)[number];
@@ -78,6 +79,7 @@ const ACCION_LABEL: Record<AuthAccion, string> = {
   devolver: "Devolver",
   visto_bueno: "Visto bueno",
   desactivar: "Desactivar",
+  validar_contabilidad: "Validar Contabilidad",
 };
 
 function acciones(
@@ -111,6 +113,7 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
           "editar",
           "eliminar",
           "confirmar",
+          "validar_contabilidad",
           "exportar",
           "adjuntos_subir",
           "adjuntos_eliminar",

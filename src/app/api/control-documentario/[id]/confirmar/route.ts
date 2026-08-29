@@ -44,6 +44,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!doc.tipo_documento) {
       return jsonError("No se puede confirmar: falta tipo_documento.", 400);
     }
+    if (!(doc.doc_transferencia ?? "").trim()) {
+      return jsonError("No se puede confirmar: falta doc_transferencia.", 400);
+    }
+    if (doc.validado_contabilidad !== true) {
+      return jsonError(
+        "No se puede confirmar: falta validación de Contabilidad.",
+        400
+      );
+    }
 
     if (doc.es_delivery) {
       const razon = (doc.razon_social ?? "").trim();

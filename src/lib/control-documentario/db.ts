@@ -17,6 +17,7 @@ export type DocumentoRow = {
   fecha_emision: string;
   tipo_documento: string;
   numero_documento: string | null;
+  doc_transferencia: string | null;
   ruc: string | null;
   razon_social: string | null;
   placa: string | null;
@@ -24,6 +25,7 @@ export type DocumentoRow = {
   valor_sin_igv: number | string | null;
   valor_con_igv: number | string | null;
   observaciones: string | null;
+  validado_contabilidad: boolean;
   confirmado: boolean;
   confirmado_at: string | null;
   created_at: string | null;

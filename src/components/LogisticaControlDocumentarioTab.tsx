@@ -80,6 +80,7 @@ type DocumentoListItem = {
   fecha_emision: string;
   tipo_documento: string;
   numero_documento: string | null;
+  doc_transferencia: string | null;
   ruc: string | null;
   razon_social: string | null;
   placa: string | null;
@@ -87,6 +88,7 @@ type DocumentoListItem = {
   valor_sin_igv: number | string | null;
   valor_con_igv: number | string | null;
   observaciones: string | null;
+  validado_contabilidad: boolean;
   confirmado: boolean;
   confirmado_at: string | null;
   adjuntos_count?: number;
@@ -219,6 +221,11 @@ export default function LogisticaControlDocumentarioTab() {
   const canEditar = puede("logistica", "control_documentario", "editar");
   const canEliminar = puede("logistica", "control_documentario", "eliminar");
   const canConfirmar = puede("logistica", "control_documentario", "confirmar");
+  const canValidarContabilidad = puede(
+    "logistica",
+    "control_documentario",
+    "validar_contabilidad"
+  );
   const canExportar = puede("logistica", "control_documentario", "exportar");
   const canSubirAdjuntos = puede(
     "logistica",
@@ -253,6 +260,7 @@ export default function LogisticaControlDocumentarioTab() {
   const [confirmTarget, setConfirmTarget] = useState<DocumentoListItem | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [validatingId, setValidatingId] = useState<string | null>(null);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -330,6 +338,51 @@ export default function LogisticaControlDocumentarioTab() {
     }
   }
 
+  async function handleValidacionContabilidad(
+    item: DocumentoListItem,
+    next: boolean
+  ) {
+    if (item.confirmado || validatingId) return;
+    setValidatingId(item.id);
+    try {
+      const res = await fetch(
+        `/api/control-documentario/${item.id}/validacion-contabilidad`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ validado_contabilidad: next }),
+        }
+      );
+      const json = (await res.json()) as {
+        success: boolean;
+        error?: string;
+        data?: DocumentoListItem;
+      };
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "No se pudo actualizar la validación");
+      }
+      const updated = json.data;
+      setItems((prev) =>
+        prev.map((row) =>
+          row.id === item.id
+            ? {
+                ...row,
+                validado_contabilidad:
+                  updated?.validado_contabilidad ?? next,
+              }
+            : row
+        )
+      );
+    } catch (err) {
+      flash("error", err instanceof Error ? err.message : "Error al validar");
+    } finally {
+      setValidatingId(null);
+    }
+  }
+
   async function handleConfirm() {
     if (!confirmTarget || confirming) return;
     setConfirming(true);
@@ -384,6 +437,7 @@ export default function LogisticaControlDocumentarioTab() {
         "Fecha Emisión": formatFecha(item.fecha_emision),
         "Tipo Doc.": item.tipo_documento,
         "N° Documento": item.numero_documento ?? "",
+        "Doc. Transferencia": (item.doc_transferencia ?? "").trim(),
         RUC: item.ruc ?? "",
         "Razón Social": item.razon_social ?? "",
         Placa: item.placa ?? "",
@@ -391,6 +445,7 @@ export default function LogisticaControlDocumentarioTab() {
         "Valor Sin IGV": toMoney(item.valor_sin_igv),
         "Valor Con IGV": toMoney(item.valor_con_igv),
         Adjuntos: item.adjuntos_count ?? 0,
+        Contabilidad: item.validado_contabilidad ? "Validado" : "Pendiente",
         Estado: item.confirmado
           ? `Confirmado ${formatFechaHora(item.confirmado_at)}`
           : "Borrador",
@@ -527,31 +582,28 @@ export default function LogisticaControlDocumentarioTab() {
 
       <div className="overflow-hidden rounded-xl border border-border">
         <div className="w-full overflow-x-auto" style={{ maxHeight: "calc(100vh - 240px)" }}>
-          <table className="min-w-[1480px] w-full divide-y divide-border text-left text-xs">
+          <table className="min-w-[1280px] w-full divide-y divide-border text-left text-xs">
             <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="sticky left-0 z-20 bg-slate-50 px-1.5 py-2">Acciones</th>
                 <th className="px-1.5 py-2">OC</th>
                 <th className="px-1.5 py-2">Tipo Pago</th>
-                <th className="px-1.5 py-2">Empresa</th>
-                <th className="px-1.5 py-2">Autoriza</th>
                 <th className="px-1.5 py-2">Fecha Emisión</th>
                 <th className="px-1.5 py-2">Tipo Doc.</th>
                 <th className="px-1.5 py-2">N° Documento</th>
+                <th className="px-1.5 py-2">Doc. Transferencia</th>
                 <th className="px-1.5 py-2">RUC</th>
                 <th className="px-1.5 py-2">Razón Social</th>
                 <th className="px-1.5 py-2">Placa</th>
                 <th className="px-1.5 py-2">Descripción</th>
-                <th className="px-1.5 py-2 text-right">Valor Sin IGV</th>
                 <th className="px-1.5 py-2 text-right">Valor Con IGV</th>
                 <th className="px-1.5 py-2">Adjuntos</th>
-                <th className="px-1.5 py-2">Estado</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border bg-white">
               {loading ? (
                 <tr>
-                  <td colSpan={16} className="px-4 py-12 text-center text-muted">
+                  <td colSpan={13} className="px-4 py-12 text-center text-muted">
                     <span className="inline-flex items-center gap-2 text-sm">
                       <Loader2 className="h-4 w-4 animate-spin text-accent" />
                       Cargando documentos…
@@ -560,7 +612,7 @@ export default function LogisticaControlDocumentarioTab() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={16} className="px-4 py-12 text-center text-muted">
+                  <td colSpan={13} className="px-4 py-12 text-center text-muted">
                     No hay documentos para los filtros actuales.
                   </td>
                 </tr>
@@ -569,6 +621,22 @@ export default function LogisticaControlDocumentarioTab() {
                   <tr key={item.id} className="hover:bg-accent/5">
                     <td className="sticky left-0 bg-white px-1.5 py-1.5">
                       <div className="flex items-center gap-0.5">
+                        {canValidarContabilidad ? (
+                          <input
+                            type="checkbox"
+                            className="mx-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-emerald-600 disabled:cursor-not-allowed"
+                            checked={Boolean(item.validado_contabilidad)}
+                            disabled={item.confirmado || validatingId === item.id}
+                            title="Validar Contabilidad"
+                            aria-label="Validar Contabilidad"
+                            onChange={(e) =>
+                              void handleValidacionContabilidad(
+                                item,
+                                e.target.checked
+                              )
+                            }
+                          />
+                        ) : null}
                         <button
                           type="button"
                           title="Ver detalle"
@@ -632,15 +700,18 @@ export default function LogisticaControlDocumentarioTab() {
                       {ocLabel(item)}
                     </td>
                     <td className="px-1.5 py-1.5">{item.tipo_pago}</td>
-                    <td className="px-1.5 py-1.5">
-                      <TruncCell value={item.empresa || "-"} />
-                    </td>
-                    <td className="px-1.5 py-1.5">
-                      <TruncCell value={item.autoriza || "-"} />
-                    </td>
                     <td className="px-1.5 py-1.5">{formatFecha(item.fecha_emision)}</td>
                     <td className="px-1.5 py-1.5">{item.tipo_documento}</td>
                     <td className="px-1.5 py-1.5">{item.numero_documento || "-"}</td>
+                    <td className="px-1.5 py-1.5">
+                      {(item.doc_transferencia ?? "").trim() ? (
+                        <TruncCell value={(item.doc_transferencia ?? "").trim()} />
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                          Pendiente
+                        </span>
+                      )}
+                    </td>
                     <td className="px-1.5 py-1.5">{item.ruc || "-"}</td>
                     <td className="px-1.5 py-1.5">
                       <TruncCell value={item.razon_social || "-"} />
@@ -648,9 +719,6 @@ export default function LogisticaControlDocumentarioTab() {
                     <td className="px-1.5 py-1.5">{item.placa || "-"}</td>
                     <td className="px-1.5 py-1.5">
                       <TruncCell value={item.descripcion || "-"} />
-                    </td>
-                    <td className="px-1.5 py-1.5 text-right">
-                      {formatSoles(item.valor_sin_igv)}
                     </td>
                     <td className="px-1.5 py-1.5 text-right font-medium">
                       {formatSoles(item.valor_con_igv)}
@@ -663,19 +731,6 @@ export default function LogisticaControlDocumentarioTab() {
                       >
                         📎 {item.adjuntos_count ?? 0}
                       </button>
-                    </td>
-                    <td className="px-1.5 py-1.5">
-                      {item.confirmado ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          <Lock className="h-3 w-3" />
-                          {formatFechaHora(item.confirmado_at)}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-                          <Unlock className="h-3 w-3" />
-                          Borrador
-                        </span>
-                      )}
                     </td>
                   </tr>
                 ))
@@ -732,7 +787,7 @@ export default function LogisticaControlDocumentarioTab() {
           onClose={() => !confirming && setConfirmTarget(null)}
         >
           <p className="text-sm text-slate-700">
-            ¿Estás seguro de confirmar este documento? Una vez confirmado no podrá ser editado ni eliminado.
+            ¿Estás seguro de confirmar este documento? Debe tener Doc. Transferencia y validación de Contabilidad. Una vez confirmado no podrá ser editado ni eliminado.
           </p>
           <div className="mt-4 flex justify-end gap-2">
             <button
@@ -832,6 +887,7 @@ function EditorModal({
   const [fechaEmision, setFechaEmision] = useState(todayYmd());
   const [tipoDocumento, setTipoDocumento] = useState<string>("Factura");
   const [numeroDocumento, setNumeroDocumento] = useState("");
+  const [docTransferencia, setDocTransferencia] = useState("");
   const [ruc, setRuc] = useState("");
   const [razonSocial, setRazonSocial] = useState("");
   const [placa, setPlaca] = useState("");
@@ -893,6 +949,7 @@ function EditorModal({
         setFechaEmision(d.fecha_emision?.slice(0, 10) || todayYmd());
         setTipoDocumento(d.tipo_documento || "Factura");
         setNumeroDocumento(d.numero_documento ?? "");
+        setDocTransferencia(d.doc_transferencia ?? "");
         setRuc(d.ruc ?? "");
         setRazonSocial(d.razon_social ?? "");
         setPlaca(d.placa ?? "");
@@ -1066,6 +1123,7 @@ function EditorModal({
         fecha_emision: fechaEmision,
         tipo_documento: tipoDocumento,
         numero_documento: numeroDocumento.trim() || null,
+        doc_transferencia: docTransferencia.trim() || null,
         ruc: esDelivery ? null : ruc.trim(),
         razon_social: esDelivery ? razonSocial : razonSocial.trim(),
         placa: placa.trim() || null,
@@ -1272,6 +1330,17 @@ function EditorModal({
                 N° Documento
               </span>
               <input className={INPUT_CLASS} value={numeroDocumento} onChange={(e) => setNumeroDocumento(e.target.value)} placeholder="F001-000123" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                Doc. Transferencia
+              </span>
+              <input
+                className={INPUT_CLASS}
+                value={docTransferencia}
+                onChange={(e) => setDocTransferencia(e.target.value)}
+                placeholder="Opcional al crear; obligatorio para confirmar"
+              />
             </label>
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-500">

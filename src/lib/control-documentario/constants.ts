@@ -25,7 +25,7 @@ export const MIME_PERMITIDOS = [
 ] as const;
 
 export const DOCUMENTO_SELECT =
-  "id,es_delivery,numero_oc,tipo_pago,empresa,autoriza,fecha_emision,tipo_documento,numero_documento,ruc,razon_social,placa,descripcion,valor_sin_igv,valor_con_igv,observaciones,confirmado,confirmado_at,created_at,updated_at,created_by";
+  "id,es_delivery,numero_oc,tipo_pago,empresa,autoriza,fecha_emision,tipo_documento,numero_documento,doc_transferencia,ruc,razon_social,placa,descripcion,valor_sin_igv,valor_con_igv,observaciones,validado_contabilidad,confirmado,confirmado_at,created_at,updated_at,created_by";
 
 export const ITEM_SELECT =
   "id,documento_id,sigma_id,numero_oc,linea_orden,codigo_repuesto,descripcion_repuesto,cantidad,precio_total_con_igv_soles,created_at";
