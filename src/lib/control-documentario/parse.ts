@@ -26,6 +26,7 @@ export type DocumentoParsed = {
   fecha_emision: string;
   tipo_documento: string;
   numero_documento: string | null;
+  doc_transferencia: string | null;
   ruc: string | null;
   razon_social: string | null;
   placa: string | null;
@@ -212,6 +213,7 @@ export function parseDocumentoPayload(body: unknown): ParseResult {
   const valor_sin_igv = round2(valor_con_igv / 1.18);
 
   const numero_documento = nullableText(b.numero_documento);
+  const doc_transferencia = nullableText(b.doc_transferencia);
   const placa = nullableText(b.placa);
   const observaciones = nullableText(b.observaciones);
 
@@ -252,6 +254,7 @@ export function parseDocumentoPayload(body: unknown): ParseResult {
         fecha_emision,
         tipo_documento,
         numero_documento,
+        doc_transferencia,
         ruc: null,
         razon_social,
         placa,
@@ -287,6 +290,7 @@ export function parseDocumentoPayload(body: unknown): ParseResult {
       fecha_emision,
       tipo_documento,
       numero_documento,
+      doc_transferencia,
       ruc,
       razon_social,
       placa,

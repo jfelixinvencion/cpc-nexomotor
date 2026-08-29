@@ -32,6 +32,7 @@ export type DocumentoDetalle = {
   fecha_emision: string;
   tipo_documento: string;
   numero_documento: string | null;
+  doc_transferencia: string | null;
   ruc: string | null;
   razon_social: string | null;
   placa: string | null;
@@ -39,6 +40,7 @@ export type DocumentoDetalle = {
   valor_sin_igv: number | string | null;
   valor_con_igv: number | string | null;
   observaciones: string | null;
+  validado_contabilidad: boolean;
   confirmado: boolean;
   confirmado_at: string | null;
   items: DocumentoDetalleItem[];
@@ -377,7 +379,11 @@ function DetalleBody({
           <Lock className="h-3.5 w-3.5" />
           Confirmado el {formatFechaHora(doc.confirmado_at)}
         </p>
-      ) : null}
+      ) : (
+        <p className="mb-3 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+          Borrador
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="OC" value={ocLabel(doc)} />
         <Field label="Tipo Pago" value={doc.tipo_pago} />
@@ -386,11 +392,27 @@ function DetalleBody({
         <Field label="Fecha Emisión" value={formatFecha(doc.fecha_emision)} />
         <Field label="Tipo Doc." value={doc.tipo_documento} />
         <Field label="N° Documento" value={doc.numero_documento || "-"} />
+        <Field
+          label="Doc. Transferencia"
+          value={(doc.doc_transferencia ?? "").trim() || "Pendiente"}
+        />
         <Field label="RUC" value={doc.ruc || "-"} />
         <Field label="Razón Social" value={doc.razon_social || "-"} />
         <Field label="Placa" value={doc.placa || "-"} />
         <Field label="Valor Sin IGV" value={formatSoles(doc.valor_sin_igv)} />
         <Field label="Valor Con IGV" value={formatSoles(doc.valor_con_igv)} />
+        <Field
+          label="Validación Contabilidad"
+          value={doc.validado_contabilidad ? "Validado" : "Pendiente"}
+        />
+        <Field
+          label="Estado"
+          value={
+            doc.confirmado
+              ? `Confirmado ${formatFechaHora(doc.confirmado_at)}`
+              : "Borrador"
+          }
+        />
         <div className="sm:col-span-2">
           <Field label="Descripción" value={doc.descripcion || "-"} />
         </div>

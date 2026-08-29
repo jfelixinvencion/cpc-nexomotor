@@ -93,6 +93,7 @@ function headerUpdate(parsed: DocumentoParsed, descripcion: string | null) {
     fecha_emision: parsed.fecha_emision,
     tipo_documento: parsed.tipo_documento,
     numero_documento: parsed.numero_documento,
+    doc_transferencia: parsed.doc_transferencia,
     ruc: parsed.ruc,
     razon_social: parsed.razon_social,
     placa: parsed.placa,
