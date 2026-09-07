@@ -2,6 +2,7 @@
 
 import { FormEvent, type ReactNode, useEffect, useState } from "react";
 import {
+  Archive,
   ArrowLeft,
   BookOpen,
   Boxes,
@@ -21,6 +22,7 @@ import PlanillaDashboard from "@/components/PlanillaDashboard";
 import PrestamosHerramientasDashboard from "@/components/PrestamosHerramientasDashboard";
 import ConsumiblesAdminDashboard from "@/components/ConsumiblesAdminDashboard";
 import ConsumiblesAlmacenDashboard from "@/components/ConsumiblesAlmacenDashboard";
+import StockActualTab from "@/components/StockActualTab";
 import LogisticaDashboard from "@/components/LogisticaDashboard";
 import PerfilesDashboard from "@/components/PerfilesDashboard";
 import UsuariosDashboard from "@/components/UsuariosDashboard";
@@ -37,7 +39,7 @@ type View =
   | "warehouse"
   | "administracion"
   | "logistica";
-type WarehouseTab = "herramientas" | "consumibles";
+type WarehouseTab = "herramientas" | "consumibles" | "stock_actual";
 type AdminTab =
   | "planilla"
   | "herramientas"
@@ -595,15 +597,18 @@ function WarehouseView() {
   const { cargando, puede } = usePermisos();
   const canHerramientas = puede("almacen", "herramientas", "ver");
   const canConsumibles = puede("almacen", "consumibles", "ver");
+  const canStockActual = puede("almacen", "stock_actual", "ver");
 
   useEffect(() => {
     if (cargando) return;
-    if (tab === "herramientas" && !canHerramientas && canConsumibles) {
-      setTab("consumibles");
-    } else if (tab === "consumibles" && !canConsumibles && canHerramientas) {
-      setTab("herramientas");
+    const visible: WarehouseTab[] = [];
+    if (canHerramientas) visible.push("herramientas");
+    if (canConsumibles) visible.push("consumibles");
+    if (canStockActual) visible.push("stock_actual");
+    if (visible.length > 0 && !visible.includes(tab)) {
+      setTab(visible[0]);
     }
-  }, [cargando, tab, canHerramientas, canConsumibles]);
+  }, [cargando, tab, canHerramientas, canConsumibles, canStockActual]);
 
   const warehouseTabs = (
     [
@@ -618,6 +623,12 @@ function WarehouseView() {
         label: "Consumibles",
         icon: Package,
         visible: canConsumibles,
+      },
+      {
+        id: "stock_actual" as const,
+        label: "Stock Actual",
+        icon: Archive,
+        visible: canStockActual,
       },
     ] as const
   ).filter((item) => item.visible);
@@ -678,6 +689,8 @@ function WarehouseView() {
             <PrestamosHerramientasDashboard />
           ) : tab === "consumibles" && canConsumibles ? (
             <ConsumiblesAlmacenDashboard />
+          ) : tab === "stock_actual" && canStockActual ? (
+            <StockActualTab />
           ) : null}
         </div>
       </div>
