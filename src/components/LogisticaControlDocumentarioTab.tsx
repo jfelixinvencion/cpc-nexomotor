@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   Eye,
+  FileArchive,
   FileSpreadsheet,
   Loader2,
   Lock,
@@ -25,6 +26,12 @@ import DocumentoDetalleModal, {
   type DocumentoDetalle,
 } from "@/components/control-documentario/DocumentoDetalleModal";
 import { usePermisos } from "@/lib/auth/usePermisos";
+import {
+  DESCARGA_MASIVA_MAX_ARCHIVOS,
+  DESCARGA_MASIVA_MAX_DIAS,
+  type DescargaMasivaEstructura,
+} from "@/lib/control-documentario/constants";
+import { daysInclusiveYmd } from "@/lib/control-documentario/parse";
 
 const INPUT_CLASS =
   "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
@@ -242,6 +249,11 @@ export default function LogisticaControlDocumentarioTab() {
     "control_documentario",
     "adjuntos_descargar"
   );
+  const canDescargarAdjuntosMasivo = puede(
+    "logistica",
+    "control_documentario",
+    "descargar_adjuntos_masivo"
+  );
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
@@ -261,6 +273,7 @@ export default function LogisticaControlDocumentarioTab() {
   const [confirming, setConfirming] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [validatingId, setValidatingId] = useState<string | null>(null);
+  const [zipModalOpen, setZipModalOpen] = useState(false);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -562,6 +575,17 @@ export default function LogisticaControlDocumentarioTab() {
             {exporting ? "Exportando..." : "Exportar Excel"}
           </button>
           ) : null}
+          {canDescargarAdjuntosMasivo ? (
+          <button
+            type="button"
+            onClick={() => setZipModalOpen(true)}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+          >
+            <FileArchive className="h-3.5 w-3.5" />
+            Descargar adjuntos
+          </button>
+          ) : null}
         </div>
       </div>
 
@@ -781,6 +805,15 @@ export default function LogisticaControlDocumentarioTab() {
         />
       ) : null}
 
+      {zipModalOpen ? (
+        <ZipDescargaModal
+          initialDesde={fechaDesde}
+          initialHasta={fechaHasta}
+          onClose={() => setZipModalOpen(false)}
+          onSuccess={(text) => flash("success", text)}
+        />
+      ) : null}
+
       {confirmTarget ? (
         <DialogShell
           title="Confirmar documento"
@@ -811,6 +844,171 @@ export default function LogisticaControlDocumentarioTab() {
         </DialogShell>
       ) : null}
     </div>
+  );
+}
+
+function ZipDescargaModal({
+  initialDesde,
+  initialHasta,
+  onClose,
+  onSuccess,
+}: {
+  initialDesde: string;
+  initialHasta: string;
+  onClose: () => void;
+  onSuccess: (text: string) => void;
+}) {
+  const [desde, setDesde] = useState(initialDesde);
+  const [hasta, setHasta] = useState(initialHasta);
+  const [estructura, setEstructura] =
+    useState<DescargaMasivaEstructura>("transferencia_oc");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function validateRange(): string | null {
+    if (!desde || !hasta) return "Desde y Hasta son obligatorios.";
+    if (desde > hasta) return "Desde no puede ser mayor que Hasta.";
+    const dias = daysInclusiveYmd(desde, hasta);
+    if (dias == null) return "Las fechas no son válidas.";
+    if (dias > DESCARGA_MASIVA_MAX_DIAS) {
+      return `El rango no puede superar ${DESCARGA_MASIVA_MAX_DIAS} días.`;
+    }
+    return null;
+  }
+
+  async function handleGenerate() {
+    if (generating) return;
+    const invalid = validateRange();
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setGenerating(true);
+    setError(null);
+    let objectUrl: string | null = null;
+    try {
+      const res = await fetch("/api/control-documentario/descarga-masiva", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/zip, application/json",
+        },
+        body: JSON.stringify({ desde, hasta, estructura }),
+      });
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!res.ok) {
+        if (contentType.includes("application/json")) {
+          const json = (await res.json()) as { error?: string };
+          throw new Error(json.error || "No se pudo generar el ZIP");
+        }
+        throw new Error("No se pudo generar el ZIP");
+      }
+      const blob = await res.blob();
+      objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `adjuntos-control-documentario-${desde}_${hasta}.zip`;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      onSuccess("ZIP de adjuntos descargado.");
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al generar el ZIP");
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <DialogShell
+      title="Descargar adjuntos"
+      onClose={() => !generating && onClose()}
+    >
+      <div className="space-y-4">
+        <p className="text-xs text-slate-500">
+          Rango máximo {DESCARGA_MASIVA_MAX_DIAS} días. Límite{" "}
+          {DESCARGA_MASIVA_MAX_ARCHIVOS} archivos o 50 MB totales.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Desde
+            </span>
+            <input
+              type="date"
+              value={desde}
+              disabled={generating}
+              onChange={(e) => setDesde(e.target.value)}
+              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Hasta
+            </span>
+            <input
+              type="date"
+              value={hasta}
+              disabled={generating}
+              onChange={(e) => setHasta(e.target.value)}
+              className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+            />
+          </label>
+        </div>
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Estructura de carpetas
+          </legend>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="radio"
+              name="zip-estructura"
+              checked={estructura === "transferencia_oc"}
+              disabled={generating}
+              onChange={() => setEstructura("transferencia_oc")}
+            />
+            Doc. Transferencia / OC
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="radio"
+              name="zip-estructura"
+              checked={estructura === "proveedor_transferencia_oc"}
+              disabled={generating}
+              onChange={() => setEstructura("proveedor_transferencia_oc")}
+            />
+            Proveedor / Doc. Transferencia / OC
+          </label>
+        </fieldset>
+        {error ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={generating}
+            onClick={onClose}
+            className="rounded-lg border border-border px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={generating}
+            onClick={() => void handleGenerate()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileArchive className="h-4 w-4" />}
+            {generating ? "Generando..." : "Generar ZIP"}
+          </button>
+        </div>
+      </div>
+    </DialogShell>
   );
 }
 

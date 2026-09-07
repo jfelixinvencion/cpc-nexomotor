@@ -77,6 +77,25 @@ export function buildStoragePath(documentoId: string, originalName: string) {
   return `control-documentario/${documentoId}/${randomUUID()}-${sanitizeFileName(originalName)}`;
 }
 
+export async function downloadStorageObject(
+  path: string
+): Promise<{ data: Uint8Array | null; error: string | null }> {
+  const { data, error } = await supabaseAdmin.storage
+    .from(BUCKET_DOCUMENTOS)
+    .download(path);
+
+  if (error || !data) {
+    console.error(
+      "[control-documentario] storage download:",
+      error?.message ?? "sin datos"
+    );
+    return { data: null, error: "No se pudo descargar un adjunto." };
+  }
+
+  const bytes = new Uint8Array(await data.arrayBuffer());
+  return { data: bytes, error: null };
+}
+
 export async function createSignedUrl(path: string): Promise<string | null> {
   const { data, error } = await supabaseAdmin.storage
     .from(BUCKET_DOCUMENTOS)
