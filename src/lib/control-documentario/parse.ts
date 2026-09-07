@@ -56,6 +56,15 @@ export function isYmd(value: string) {
   );
 }
 
+export function daysInclusiveYmd(desde: string, hasta: string): number | null {
+  if (!isYmd(desde) || !isYmd(hasta)) return null;
+  const [y1, m1, d1] = desde.split("-").map(Number);
+  const [y2, m2, d2] = hasta.split("-").map(Number);
+  const start = Date.UTC(y1, m1 - 1, d1);
+  const end = Date.UTC(y2, m2 - 1, d2);
+  return Math.floor((end - start) / 86_400_000) + 1;
+}
+
 export function round2(value: number) {
   return Math.round(value * 100) / 100;
 }

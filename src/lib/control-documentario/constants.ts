@@ -40,3 +40,14 @@ export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export const DESCARGA_MASIVA_MAX_DIAS = 7;
+export const DESCARGA_MASIVA_MAX_ARCHIVOS = 100;
+export const DESCARGA_MASIVA_MAX_BYTES = 50 * 1024 * 1024;
+export const DESCARGA_MASIVA_ESTRUCTURAS = [
+  "transferencia_oc",
+  "proveedor_transferencia_oc",
+] as const;
+
+export type DescargaMasivaEstructura =
+  (typeof DESCARGA_MASIVA_ESTRUCTURAS)[number];
