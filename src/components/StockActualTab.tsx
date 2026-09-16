@@ -52,6 +52,12 @@ function formatStock(value: number | string | null | undefined) {
   return String(n);
 }
 
+function isZeroStock(value: number | string | null | undefined) {
+  if (value == null || value === "") return false;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n === 0;
+}
+
 export default function StockActualTab() {
   const { puede } = usePermisos();
   const canSincronizar = puede("almacen", "stock_actual", "sincronizar");
@@ -59,6 +65,7 @@ export default function StockActualTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [hideZeroStock, setHideZeroStock] = useState(true);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<{
@@ -109,8 +116,9 @@ export default function StockActualTab() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
     return items.filter((row) => {
+      if (hideZeroStock && isZeroStock(row.stock)) return false;
+      if (!q) return true;
       const codigo = asText(row.codigo).toLowerCase();
       const descripcion = asText(row.repuesto).toLowerCase();
       const ubicacion = asText(row.ubicacion).toLowerCase();
@@ -118,12 +126,12 @@ export default function StockActualTab() {
         codigo.includes(q) || descripcion.includes(q) || ubicacion.includes(q)
       );
     });
-  }, [items, search]);
+  }, [items, search, hideZeroStock]);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [search]);
+  }, [search, hideZeroStock]);
 
   const visibleRows = useMemo(
     () => filtered.slice(0, visibleCount),
@@ -207,21 +215,40 @@ export default function StockActualTab() {
             ) : null}
           </div>
         </label>
-        {canSincronizar ? (
+        <div className="flex shrink-0 items-center gap-2 lg:pb-0.5">
           <button
             type="button"
-            onClick={() => void handleSync()}
-            disabled={syncing || loading}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+            onClick={() => setHideZeroStock((prev) => !prev)}
+            aria-pressed={hideZeroStock}
+            title={
+              hideZeroStock
+                ? "Mostrar también los ítems con stock 0"
+                : "Ocultar ítems con stock 0"
+            }
+            className={
+              hideZeroStock
+                ? "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20"
+                : "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            }
           >
-            {syncing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            {syncing ? "Sincronizando..." : "Actualizar"}
+            {hideZeroStock ? "Mostrar todo" : "Ocultar sin stock"}
           </button>
-        ) : null}
+          {canSincronizar ? (
+            <button
+              type="button"
+              onClick={() => void handleSync()}
+              disabled={syncing || loading}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+            >
+              {syncing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {syncing ? "Sincronizando..." : "Actualizar"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {syncing ? (
@@ -275,7 +302,7 @@ export default function StockActualTab() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-muted">
-                    {search.trim()
+                    {items.length > 0 && (search.trim() || hideZeroStock)
                       ? "No se encontraron resultados para el filtro actual."
                       : "No hay registros de stock."}
                   </td>
