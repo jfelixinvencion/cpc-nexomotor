@@ -14,6 +14,7 @@ export const AUTH_PESTANAS = [
   "perfiles",
   "usuarios",
   "stock_actual",
+  "repuestos",
 ] as const;
 
 export const AUTH_ACCIONES = [
@@ -144,6 +145,11 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
         pestana: "consumibles",
         label: "Consumibles",
         acciones: acciones(["ver", "crear", "editar", "eliminar"]),
+      },
+      {
+        pestana: "repuestos",
+        label: "Repuestos",
+        acciones: acciones(["ver", "editar"]),
       },
       {
         pestana: "perfiles",

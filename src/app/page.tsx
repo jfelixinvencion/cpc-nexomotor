@@ -13,6 +13,7 @@ import {
   Package,
   Settings,
   Shield,
+  Tags,
   Truck,
   Users,
   Wrench,
@@ -26,6 +27,7 @@ import StockActualTab from "@/components/StockActualTab";
 import LogisticaDashboard from "@/components/LogisticaDashboard";
 import PerfilesDashboard from "@/components/PerfilesDashboard";
 import UsuariosDashboard from "@/components/UsuariosDashboard";
+import RepuestosClasificacionTab from "@/components/RepuestosClasificacionTab";
 import {
   AUTH_CHANGED_EVENT,
   invalidatePermisosCache,
@@ -44,6 +46,7 @@ type AdminTab =
   | "planilla"
   | "herramientas"
   | "consumibles"
+  | "repuestos"
   | "perfiles"
   | "usuarios";
 type ActiveAreaId = "almacen" | "administracion" | "logistica";
@@ -721,6 +724,7 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
         icon: Package,
         pestana: "consumibles",
       },
+      { id: "repuestos", label: "REPUESTOS", icon: Tags, pestana: "repuestos" },
       { id: "perfiles", label: "PERFILES", icon: Shield, pestana: "perfiles" },
       { id: "usuarios", label: "USUARIOS", icon: Users, pestana: "usuarios" },
     ] as const
@@ -808,6 +812,8 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
             <HerramientasDashboard />
           ) : tab === "consumibles" ? (
             <ConsumiblesAdminDashboard />
+          ) : tab === "repuestos" ? (
+            <RepuestosClasificacionTab />
           ) : tab === "perfiles" ? (
             <PerfilesDashboard
               sessionOk={sessionOk}
@@ -815,14 +821,14 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
               isLegacy={isLegacy}
               permisos={permisos}
             />
-          ) : (
+          ) : tab === "usuarios" ? (
             <UsuariosDashboard
               sessionOk={sessionOk}
               sessionExpired={sessionExpired}
               isLegacy={isLegacy}
               permisos={permisos}
             />
-          )}
+          ) : null}
         </div>
       </div>
     </section>
