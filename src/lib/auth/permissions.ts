@@ -2,6 +2,7 @@ export const AUTH_MODULOS = [
   "logistica",
   "administracion",
   "almacen",
+  "dashboard",
 ] as const;
 
 export const AUTH_PESTANAS = [
@@ -15,6 +16,7 @@ export const AUTH_PESTANAS = [
   "usuarios",
   "stock_actual",
   "repuestos",
+  "inventario",
 ] as const;
 
 export const AUTH_ACCIONES = [
@@ -184,6 +186,17 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
           { accion: "ver", label: ACCION_LABEL.ver },
           { accion: "sincronizar", label: "Sincronizar stock" },
         ],
+      },
+    ],
+  },
+  {
+    modulo: "dashboard",
+    label: "Dashboard",
+    pestanas: [
+      {
+        pestana: "inventario",
+        label: "Inventario",
+        acciones: acciones(["ver"]),
       },
     ],
   },
