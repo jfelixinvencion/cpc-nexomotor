@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { usePermisos } from "@/lib/auth/usePermisos";
 import {
   OBSOLESCENCIA_VALUES,
   TIPO_SKU_VALUES,
   parseRepuestoDate,
+  type ImportFilaError,
+  type ImportFilaRaw,
   type Obsolescencia,
   type RepuestoClasificacionRow,
   type TipoSku,
 } from "@/lib/repuestos-clasificacion";
+import { parseClasificacionExcel } from "@/lib/repuestos-clasificacion-excel";
 
 const PAGE_SIZE = 50;
 const TEXT_SAVE_MS = 450;
@@ -18,10 +21,26 @@ const TEXT_SAVE_MS = 450;
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type EditableField = "tipo_sku" | "categoria" | "sub_categoria" | "obsolescencia";
 
+type ImportSummary = {
+  filas: ImportFilaRaw[];
+  total_filas: number;
+  actualizados: number;
+  errores: ImportFilaError[];
+  applied: boolean;
+};
+
 type ApiList = {
   success?: boolean;
   error?: unknown;
   items?: RepuestoClasificacionRow[];
+};
+
+type ImportApi = {
+  success?: boolean;
+  error?: unknown;
+  total_filas?: number;
+  actualizados?: number;
+  errores?: ImportFilaError[];
 };
 
 function asText(value: unknown) {
@@ -68,6 +87,15 @@ function formatEmptyNumber(value: number | string | null | undefined) {
   return n.toLocaleString("es-PE", {
     maximumFractionDigits: 2,
   });
+}
+
+function isIncompleteRow(row: RepuestoClasificacionRow) {
+  return (
+    asText(row.tipo_sku) === "" ||
+    asText(row.categoria) === "" ||
+    asText(row.sub_categoria) === "" ||
+    asText(row.obsolescencia) === ""
+  );
 }
 
 function SaveHint({ status }: { status: SaveStatus }) {
@@ -176,8 +204,13 @@ export default function RepuestosClasificacionTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [syncing, setSyncing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(
+    null
+  );
   const [message, setMessage] = useState<{
     type: "success" | "error";
     text: string;
@@ -185,6 +218,7 @@ export default function RepuestosClasificacionTab() {
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLTableRowElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const msgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -231,10 +265,16 @@ export default function RepuestosClasificacionTab() {
     };
   }, [load]);
 
+  const incompleteCount = useMemo(
+    () => items.filter(isIncompleteRow).length,
+    [items]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
     return items.filter((row) => {
+      if (onlyIncomplete && !isIncompleteRow(row)) return false;
+      if (!q) return true;
       return (
         asText(row.codigo).toLowerCase().includes(q) ||
         asText(row.descripcion).toLowerCase().includes(q) ||
@@ -243,12 +283,12 @@ export default function RepuestosClasificacionTab() {
         asText(row.sub_categoria).toLowerCase().includes(q)
       );
     });
-  }, [items, search]);
+  }, [items, search, onlyIncomplete]);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [search]);
+  }, [search, onlyIncomplete]);
 
   const visibleRows = useMemo(
     () => filtered.slice(0, visibleCount),
@@ -379,6 +419,87 @@ export default function RepuestosClasificacionTab() {
     }
   }
 
+  async function postImport(filas: ImportFilaRaw[], apply: boolean) {
+    const res = await fetch(
+      "/api/administracion/repuestos-clasificacion/importar",
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filas, apply }),
+      }
+    );
+    const json = (await res.json().catch(() => ({}))) as ImportApi;
+    if (!res.ok || json.success === false) {
+      throw new Error(
+        apiErrorMessage(json.error ?? json, `Error HTTP ${res.status}`)
+      );
+    }
+    return {
+      total_filas: Number(json.total_filas ?? 0),
+      actualizados: Number(json.actualizados ?? 0),
+      errores: Array.isArray(json.errores) ? json.errores : [],
+    };
+  }
+
+  async function handleImportFile(file: File) {
+    if (importing) return;
+    setImporting(true);
+    setMessage(null);
+    try {
+      const parsed = parseClasificacionExcel(await file.arrayBuffer());
+      if ("error" in parsed) throw new Error(parsed.error);
+      const preview = await postImport(parsed.filas, false);
+      setImportSummary({
+        filas: parsed.filas,
+        total_filas: preview.total_filas,
+        actualizados: preview.actualizados,
+        errores: preview.errores,
+        applied: false,
+      });
+    } catch (err) {
+      flash(
+        "error",
+        err instanceof Error ? err.message : "No se pudo leer el Excel"
+      );
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function confirmImport() {
+    if (!importSummary || importSummary.applied || importing) return;
+    setImporting(true);
+    try {
+      const result = await postImport(importSummary.filas, true);
+      setImportSummary({
+        ...importSummary,
+        total_filas: result.total_filas,
+        actualizados: result.actualizados,
+        errores: result.errores,
+        applied: true,
+      });
+      await load();
+      flash(
+        "success",
+        result.actualizados > 0
+          ? `${result.actualizados} código${result.actualizados === 1 ? "" : "s"} actualizado${result.actualizados === 1 ? "" : "s"}`
+          : "No hubo códigos para actualizar"
+      );
+    } catch (err) {
+      flash(
+        "error",
+        err instanceof Error ? err.message : "Error al importar"
+      );
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div role="tabpanel" className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:gap-3">
@@ -406,22 +527,77 @@ export default function RepuestosClasificacionTab() {
             ) : null}
           </div>
         </label>
-        {canEditar ? (
+        <div className="flex shrink-0 items-center gap-2 lg:pb-0.5">
           <button
             type="button"
-            onClick={() => void handleSync()}
-            disabled={syncing || loading}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+            onClick={() => setOnlyIncomplete((prev) => !prev)}
+            aria-pressed={onlyIncomplete}
+            title={
+              onlyIncomplete
+                ? "Mostrar todos los repuestos"
+                : "Mostrar solo los que tienen algún campo de clasificación vacío"
+            }
+            className={
+              onlyIncomplete
+                ? "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20"
+                : "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            }
           >
-            {syncing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            {syncing ? "Actualizando..." : "Actualizar"}
+            {onlyIncomplete
+              ? `Mostrando incompletos (${incompleteCount})`
+              : `Solo incompletos (${incompleteCount})`}
           </button>
-        ) : null}
+          {canEditar ? (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleImportFile(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={syncing || importing || loading}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+              >
+                {importing && !importSummary?.applied ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                {importing && !importSummary ? "Leyendo..." : "Importar Excel"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSync()}
+                disabled={syncing || importing || loading}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+              >
+                {syncing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {syncing ? "Actualizando..." : "Actualizar"}
+              </button>
+            </>
+          ) : null}
+        </div>
       </div>
+
+      {importing ? (
+        <div className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {importSummary && !importSummary.applied
+            ? "Importando..."
+            : "Leyendo Excel..."}
+        </div>
+      ) : null}
 
       {syncing ? (
         <div className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent">
@@ -482,7 +658,7 @@ export default function RepuestosClasificacionTab() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={13} className="px-4 py-12 text-center text-muted">
-                    {search.trim()
+                    {items.length > 0 && (search.trim() || onlyIncomplete)
                       ? "No se encontraron resultados para el filtro actual."
                       : "No hay registros de repuestos."}
                   </td>
@@ -615,6 +791,140 @@ export default function RepuestosClasificacionTab() {
           </table>
         </div>
       </div>
+
+      {importSummary ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-repuestos-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !importing) {
+              setImportSummary(null);
+            }
+          }}
+        >
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-slate-900/20">
+            <div className="flex items-center justify-between border-b border-border bg-emerald-50/60 px-5 py-4">
+              <h3
+                id="import-repuestos-title"
+                className="text-base font-bold text-foreground"
+              >
+                {importSummary.applied
+                  ? "Resultado de la importación"
+                  : "Confirmar importación"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setImportSummary(null)}
+                disabled={importing}
+                className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white hover:text-slate-800 disabled:opacity-50"
+                aria-label="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4 overflow-auto p-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-border bg-slate-50 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Filas
+                  </p>
+                  <p className="text-lg font-bold text-foreground">
+                    {importSummary.total_filas}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                    {importSummary.applied ? "Actualizados" : "A actualizar"}
+                  </p>
+                  <p className="text-lg font-bold text-emerald-800">
+                    {importSummary.actualizados}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-red-700">
+                    Con error
+                  </p>
+                  <p className="text-lg font-bold text-red-800">
+                    {importSummary.errores.length}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">
+                Las celdas vacías no sobrescriben valores existentes. Si una
+                fila tiene un campo inválido, no se aplica ningún cambio de esa
+                fila.
+              </p>
+              {importSummary.errores.length > 0 ? (
+                <div className="overflow-hidden rounded-xl border border-border">
+                  <div className="max-h-56 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2">Código</th>
+                          <th className="px-3 py-2">Motivo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border bg-white">
+                        {importSummary.errores.map((item, index) => (
+                          <tr key={`${item.codigo}:${index}`}>
+                            <td className="px-3 py-1.5 font-mono text-accent">
+                              {item.codigo || "—"}
+                            </td>
+                            <td className="px-3 py-1.5 text-slate-700">
+                              {item.motivo}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600">
+                  {importSummary.actualizados > 0
+                    ? "Todas las filas con datos son válidas."
+                    : "No hay campos con valor para actualizar."}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border bg-slate-50/80 px-5 py-3">
+              {importSummary.applied ? (
+                <button
+                  type="button"
+                  onClick={() => setImportSummary(null)}
+                  className="inline-flex items-center rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cerrar
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setImportSummary(null)}
+                    disabled={importing}
+                    className="inline-flex items-center rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmImport()}
+                    disabled={importing || importSummary.actualizados === 0}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-50"
+                  >
+                    {importing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    {importing ? "Importando..." : "Confirmar importación"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

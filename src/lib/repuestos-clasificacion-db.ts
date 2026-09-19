@@ -5,9 +5,15 @@ import {
   calcularStockOutDias,
   isObsolescencia,
   isTipoSku,
+  type ImportFilaRaw,
+  type ImportFilaError,
+  type ImportPatch,
   type Obsolescencia,
   type RepuestoClasificacionRow,
   type TipoSku,
+  buildImportPatch,
+  importPatchHasUpdates,
+  isBlankImportFila,
 } from "@/lib/repuestos-clasificacion";
 
 const PAGE_SIZE = 1000;
@@ -174,3 +180,156 @@ export async function listRepuestosClasificacion(): Promise<
 }
 
 export const INSERT_BATCH_SIZE = 500;
+const IMPORT_APPLY_CHUNK = 20;
+
+export type ImportClasificacionResult = {
+  total_filas: number;
+  actualizados: number;
+  errores: ImportFilaError[];
+};
+
+function clasifExistsMap(rows: ClasificacionMin[]): Set<string> {
+  return new Set(rows.map((row) => row.codigo).filter(Boolean));
+}
+
+function repuestoCodigoIndex(rows: RepuestoMin[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.codigo) continue;
+    index.set(row.codigo, row.codigo);
+    const lower = row.codigo.toLowerCase();
+    if (!index.has(lower)) index.set(lower, row.codigo);
+  }
+  return index;
+}
+
+function resolveRepuestoCodigo(
+  codigo: string,
+  index: Map<string, string>
+): string | null {
+  return index.get(codigo) ?? index.get(codigo.toLowerCase()) ?? null;
+}
+
+async function applyImportPatch(
+  patch: ImportPatch,
+  existsClasif: boolean,
+  now: string
+) {
+  const fields: Record<string, unknown> = { updated_at: now };
+  if (patch.tipo_sku !== undefined) fields.tipo_sku = patch.tipo_sku;
+  if (patch.categoria !== undefined) fields.categoria = patch.categoria;
+  if (patch.sub_categoria !== undefined) {
+    fields.sub_categoria = patch.sub_categoria;
+  }
+  if (patch.obsolescencia !== undefined) {
+    fields.obsolescencia = patch.obsolescencia;
+  }
+
+  if (existsClasif) {
+    const { error } = await supabaseAdmin
+      .from("repuestos_clasificacion")
+      .update(fields)
+      .eq("codigo", patch.codigo);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { error } = await supabaseAdmin.from("repuestos_clasificacion").insert({
+    codigo: patch.codigo,
+    tipo_sku: patch.tipo_sku ?? null,
+    categoria: patch.categoria ?? null,
+    sub_categoria: patch.sub_categoria ?? null,
+    obsolescencia: patch.obsolescencia ?? null,
+    consumo_prom_dia: null,
+    created_at: now,
+    updated_at: now,
+  });
+  if (!error) return;
+  if (error.code === "23505") {
+    const { error: retryError } = await supabaseAdmin
+      .from("repuestos_clasificacion")
+      .update(fields)
+      .eq("codigo", patch.codigo);
+    if (retryError) throw new Error(retryError.message);
+    return;
+  }
+  throw new Error(error.message);
+}
+
+export async function importarClasificacion(
+  filas: ImportFilaRaw[],
+  apply: boolean
+): Promise<ImportClasificacionResult> {
+  const [repuestos, clasificacion] = await Promise.all([
+    fetchAllRepuestosMinimos(),
+    fetchAllClasificacion(),
+  ]);
+  const codigoIndex = repuestoCodigoIndex(repuestos);
+  const existingClasif = clasifExistsMap(clasificacion);
+
+  const errores: ImportFilaError[] = [];
+  const validByCodigo = new Map<string, ImportPatch>();
+  let totalFilas = 0;
+
+  for (const row of filas) {
+    if (isBlankImportFila(row)) continue;
+    totalFilas += 1;
+    const built = buildImportPatch(row);
+    if (!built.ok) {
+      errores.push(built.error);
+      continue;
+    }
+    const canonical = resolveRepuestoCodigo(built.patch.codigo, codigoIndex);
+    if (!canonical) {
+      errores.push({
+        codigo: built.patch.codigo,
+        motivo: "Código no encontrado en repuestos",
+      });
+      continue;
+    }
+    const next = { ...built.patch, codigo: canonical };
+    const prev = validByCodigo.get(canonical);
+    validByCodigo.set(canonical, prev ? { ...prev, ...next } : next);
+  }
+
+  const toApply = Array.from(validByCodigo.values()).filter(importPatchHasUpdates);
+  if (!apply) {
+    return {
+      total_filas: totalFilas,
+      actualizados: toApply.length,
+      errores,
+    };
+  }
+
+  const now = new Date().toISOString();
+  let actualizados = 0;
+  for (let i = 0; i < toApply.length; i += IMPORT_APPLY_CHUNK) {
+    const chunk = toApply.slice(i, i + IMPORT_APPLY_CHUNK);
+    const results = await Promise.allSettled(
+      chunk.map((patch) =>
+        applyImportPatch(patch, existingClasif.has(patch.codigo), now)
+      )
+    );
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        actualizados += 1;
+        existingClasif.add(chunk[index].codigo);
+        return;
+      }
+      const message =
+        result.reason instanceof Error
+          ? result.reason.message
+          : "No se pudo guardar";
+      errores.push({
+        codigo: chunk[index].codigo,
+        motivo: `No se pudo guardar: ${message}`,
+      });
+    });
+  }
+
+  return {
+    total_filas: totalFilas,
+    actualizados,
+    errores,
+  };
+}
