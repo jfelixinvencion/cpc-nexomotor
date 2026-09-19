@@ -113,3 +113,108 @@ export function asNullableText(value: unknown): string | null {
   const text = String(value).trim();
   return text === "" ? null : text;
 }
+
+export type ImportFilaRaw = {
+  codigo?: unknown;
+  tipo_sku?: unknown;
+  categoria?: unknown;
+  sub_categoria?: unknown;
+  obsolescencia?: unknown;
+};
+
+export type ImportPatch = {
+  codigo: string;
+  tipo_sku?: TipoSku;
+  categoria?: string;
+  sub_categoria?: string;
+  obsolescencia?: Obsolescencia;
+};
+
+export type ImportFilaError = {
+  codigo: string;
+  motivo: string;
+};
+
+function isNormError(value: unknown): value is { error: string } {
+  return (
+    typeof value === "object" &&
+    value != null &&
+    "error" in value &&
+    typeof (value as { error: unknown }).error === "string"
+  );
+}
+
+export function normalizeTipoSkuInput(
+  value: unknown
+): TipoSku | null | { error: string } {
+  const text = asNullableText(value);
+  if (text == null) return null;
+  const found = TIPO_SKU_VALUES.find(
+    (item) => item.toLowerCase() === text.toLowerCase()
+  );
+  if (found) return found;
+  return { error: `tipo_sku inválido: "${text}"` };
+}
+
+export function normalizeObsolescenciaInput(
+  value: unknown
+): Obsolescencia | null | { error: string } {
+  const text = asNullableText(value);
+  if (text == null) return null;
+  const folded = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (folded === "si") return "Si";
+  if (folded === "no") return "No";
+  return { error: `obsolescencia inválida: "${text}"` };
+}
+
+export function buildImportPatch(
+  row: ImportFilaRaw
+): { ok: true; patch: ImportPatch } | { ok: false; error: ImportFilaError } {
+  const codigo = asNullableText(row.codigo);
+  if (!codigo) {
+    return {
+      ok: false,
+      error: { codigo: "", motivo: "Código vacío" },
+    };
+  }
+
+  const tipo = normalizeTipoSkuInput(row.tipo_sku);
+  if (isNormError(tipo)) {
+    return { ok: false, error: { codigo, motivo: tipo.error } };
+  }
+  const obs = normalizeObsolescenciaInput(row.obsolescencia);
+  if (isNormError(obs)) {
+    return { ok: false, error: { codigo, motivo: obs.error } };
+  }
+
+  const patch: ImportPatch = { codigo };
+  if (tipo) patch.tipo_sku = tipo;
+  const categoria = asNullableText(row.categoria);
+  if (categoria) patch.categoria = categoria;
+  const subCategoria = asNullableText(row.sub_categoria);
+  if (subCategoria) patch.sub_categoria = subCategoria;
+  if (obs) patch.obsolescencia = obs;
+  return { ok: true, patch };
+}
+
+export function importPatchHasUpdates(patch: ImportPatch): boolean {
+  return (
+    patch.tipo_sku != null ||
+    patch.categoria != null ||
+    patch.sub_categoria != null ||
+    patch.obsolescencia != null
+  );
+}
+
+export function isBlankImportFila(row: ImportFilaRaw): boolean {
+  return (
+    asNullableText(row.codigo) == null &&
+    asNullableText(row.tipo_sku) == null &&
+    asNullableText(row.categoria) == null &&
+    asNullableText(row.sub_categoria) == null &&
+    asNullableText(row.obsolescencia) == null
+  );
+}
