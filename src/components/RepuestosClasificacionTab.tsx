@@ -6,7 +6,7 @@ import { usePermisos } from "@/lib/auth/usePermisos";
 import {
   OBSOLESCENCIA_VALUES,
   TIPO_SKU_VALUES,
-  parseRepuestoDate,
+  rotacionDesdeDias,
   type ImportFilaError,
   type ImportFilaRaw,
   type Obsolescencia,
@@ -62,22 +62,6 @@ function formatStock(value: number | string | null | undefined) {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return String(value);
   return String(n);
-}
-
-function formatSoles(value: number | string | null | undefined) {
-  if (value == null || value === "") return "-";
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return "-";
-  return `S/ ${n.toLocaleString("es-PE", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatFecha(value: string | null | undefined) {
-  const d = parseRepuestoDate(value);
-  if (!d) return value ? String(value) : "-";
-  return d.toLocaleDateString("es-PE");
 }
 
 function formatEmptyNumber(value: number | string | null | undefined) {
@@ -627,14 +611,13 @@ export default function RepuestosClasificacionTab() {
           className="w-full overflow-auto"
           style={{ maxHeight: "calc(100vh - 280px)" }}
         >
-          <table className="min-w-[1280px] w-full divide-y divide-border text-left text-xs">
+          <table className="min-w-[1180px] w-full divide-y divide-border text-left text-xs">
             <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-2 py-2">Código</th>
                 <th className="px-2 py-2">Descripción</th>
                 <th className="px-2 py-2 text-right">Stock</th>
-                <th className="px-2 py-2">Último Egreso</th>
-                <th className="px-2 py-2 text-right">Costo Unitario</th>
+                <th className="px-2 py-2 text-right">Días Sin Rotación</th>
                 <th className="px-2 py-2">Tipo SKU</th>
                 <th className="px-2 py-2">Categoría</th>
                 <th className="px-2 py-2">Sub Categoría</th>
@@ -648,7 +631,7 @@ export default function RepuestosClasificacionTab() {
             <tbody className="divide-y divide-border bg-white">
               {loading ? (
                 <tr>
-                  <td colSpan={13} className="px-4 py-12 text-center text-muted">
+                  <td colSpan={12} className="px-4 py-12 text-center text-muted">
                     <span className="inline-flex items-center gap-2 text-sm">
                       <Loader2 className="h-4 w-4 animate-spin text-accent" />
                       Cargando repuestos…
@@ -657,7 +640,7 @@ export default function RepuestosClasificacionTab() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-4 py-12 text-center text-muted">
+                  <td colSpan={12} className="px-4 py-12 text-center text-muted">
                     {items.length > 0 && (search.trim() || onlyIncomplete)
                       ? "No se encontraron resultados para el filtro actual."
                       : "No hay registros de repuestos."}
@@ -670,6 +653,7 @@ export default function RepuestosClasificacionTab() {
                     const catKey = statusKey(row.codigo, "categoria");
                     const subKey = statusKey(row.codigo, "sub_categoria");
                     const obsKey = statusKey(row.codigo, "obsolescencia");
+                    const rotacion = rotacionDesdeDias(row.dias_sin_rotacion);
                     return (
                       <tr
                         key={`${row.codigo}:${index}`}
@@ -682,11 +666,10 @@ export default function RepuestosClasificacionTab() {
                         <td className="px-2 py-1.5 text-right">
                           {formatStock(row.stock)}
                         </td>
-                        <td className="px-2 py-1.5">
-                          {formatFecha(row.ultimo_egreso)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-medium">
-                          {formatSoles(row.costo_unitario_soles)}
+                        <td className="px-2 py-1.5 text-right">
+                          {row.dias_sin_rotacion == null
+                            ? "Sin dato"
+                            : row.dias_sin_rotacion.toLocaleString("es-PE")}
                         </td>
                         <td className="px-2 py-1.5">
                           {canEditar ? (
@@ -731,12 +714,14 @@ export default function RepuestosClasificacionTab() {
                         <td className="px-2 py-1.5">
                           <span
                             className={
-                              row.rotacion === "Con Rotación"
+                              rotacion === "Con Rotación"
                                 ? "inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700"
-                                : "inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                : rotacion === "Sin Rotación"
+                                  ? "inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                  : "inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
                             }
                           >
-                            {row.rotacion}
+                            {rotacion}
                           </span>
                         </td>
                         <td className="px-2 py-1.5">
@@ -766,7 +751,7 @@ export default function RepuestosClasificacionTab() {
                   {hasMore ? (
                     <tr ref={sentinelRef}>
                       <td
-                        colSpan={13}
+                        colSpan={12}
                         className="px-4 py-3 text-center text-muted"
                       >
                         <span className="inline-flex items-center gap-2 text-xs">
@@ -778,7 +763,7 @@ export default function RepuestosClasificacionTab() {
                   ) : (
                     <tr>
                       <td
-                        colSpan={13}
+                        colSpan={12}
                         className="px-4 py-2 text-center text-[10px] text-slate-400"
                       >
                         {visibleRows.length} de {filtered.length} registros

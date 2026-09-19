@@ -1,13 +1,15 @@
 import {
   TIPO_SKU_VALUES,
   asNullableText,
-  parseRepuestoDate,
-  type Rotacion,
+  diasSinRotacion,
+  isSkuExcluido,
+  rotacionDesdeDias,
+  type RotacionEstado,
   type TipoSku,
 } from "@/lib/repuestos-clasificacion";
 import type { RepuestoJoinRow } from "@/lib/repuestos-clasificacion-db";
 
-const MS_PER_DAY = 86_400_000;
+export { diasSinRotacion } from "@/lib/repuestos-clasificacion";
 
 export const DASHBOARD_COLORS = {
   Preventivo: "#1D9E75",
@@ -24,7 +26,7 @@ export type InventarioItem = {
   sub_categoria: string | null;
   valor: number;
   dias_sin_rotacion: number | null;
-  rotacion: Rotacion;
+  rotacion: RotacionEstado;
   clasificado: boolean;
   stock: number;
 };
@@ -40,7 +42,7 @@ export type DetalleInventario = {
   valor: number;
   stock: number;
   dias_sin_rotacion: number | null;
-  rotacion: Rotacion;
+  rotacion: RotacionEstado;
   clasificado: boolean;
 };
 
@@ -64,27 +66,17 @@ export function isClasificado(item: {
   );
 }
 
-export function diasSinRotacion(
-  item: { ultimo_egreso?: string | null; ultimo_ingreso?: string | null },
-  now: Date = new Date()
-): number | null {
-  const parsed =
-    parseRepuestoDate(item.ultimo_egreso) ??
-    parseRepuestoDate(item.ultimo_ingreso);
-  if (!parsed) return null;
-  const days = Math.floor((now.getTime() - parsed.getTime()) / MS_PER_DAY);
-  return Number.isFinite(days) ? Math.max(0, days) : null;
-}
-
 export function toInventarioItems(
   rows: RepuestoJoinRow[],
   now: Date = new Date()
 ): InventarioItem[] {
   const items: InventarioItem[] = [];
   for (const row of rows) {
+    if (isSkuExcluido(row.codigo)) continue;
     const stock = toFiniteNumber(row.stock);
     if (stock <= 0) continue;
     const costo = toFiniteNumber(row.costo_unitario_soles);
+    const dias = diasSinRotacion(row, now);
     items.push({
       codigo: row.codigo,
       descripcion: row.descripcion,
@@ -92,8 +84,8 @@ export function toInventarioItems(
       categoria: row.categoria,
       sub_categoria: row.sub_categoria,
       valor: Math.round(stock * costo * 100) / 100,
-      dias_sin_rotacion: diasSinRotacion(row, now),
-      rotacion: row.rotacion,
+      dias_sin_rotacion: dias,
+      rotacion: rotacionDesdeDias(dias),
       clasificado: isClasificado(row),
       stock,
     });
@@ -187,7 +179,7 @@ export function porRotacion(items: InventarioItem[]) {
   let sinRotacionValor = 0;
   for (const item of clasificados(items)) {
     if (item.rotacion === "Con Rotación") conRotacion += item.valor;
-    else sinRotacionValor += item.valor;
+    else if (item.rotacion === "Sin Rotación") sinRotacionValor += item.valor;
   }
   return { conRotacion, sinRotacion: sinRotacionValor };
 }
