@@ -23,6 +23,8 @@ type RepuestoMin = {
   repuesto: string | null;
   stock: number | string | null;
   ultimo_egreso: string | null;
+  ultimo_ingreso: string | null;
+  last_sync_at: string | null;
   costo_unitario_soles: number | string | null;
 };
 
@@ -56,7 +58,9 @@ export async function fetchAllRepuestosMinimos(): Promise<RepuestoMin[]> {
   const rows = await fetchAllPages(async (from, to) => {
     const { data, error } = await supabaseAdmin
       .from("repuestos")
-      .select("codigo,repuesto,stock,ultimo_egreso,costo_unitario_soles")
+      .select(
+        "codigo,repuesto,stock,ultimo_egreso,ultimo_ingreso,last_sync_at,costo_unitario_soles"
+      )
       .order("codigo", { ascending: true })
       .range(from, to);
     return { data: (data as Record<string, unknown>[] | null) ?? null, error };
@@ -71,6 +75,8 @@ export async function fetchAllRepuestosMinimos(): Promise<RepuestoMin[]> {
       repuesto: asNullableText(row.repuesto),
       stock: (row.stock as number | string | null) ?? null,
       ultimo_egreso: asNullableText(row.ultimo_egreso),
+      ultimo_ingreso: asNullableText(row.ultimo_ingreso),
+      last_sync_at: asNullableText(row.last_sync_at),
       costo_unitario_soles:
         (row.costo_unitario_soles as number | string | null) ?? null,
     });
@@ -177,6 +183,40 @@ export async function listRepuestosClasificacion(): Promise<
     fetchLatestProveedorByCodigo(),
   ]);
   return buildClasificacionItems(repuestos, clasificacion, proveedores);
+}
+
+export type RepuestoJoinRow = RepuestoClasificacionRow & {
+  ultimo_ingreso: string | null;
+  last_sync_at: string | null;
+};
+
+export async function listRepuestosJoinBase(): Promise<{
+  items: RepuestoJoinRow[];
+  fechaActualizacionTabla: string | null;
+}> {
+  const [repuestos, clasificacion] = await Promise.all([
+    fetchAllRepuestosMinimos(),
+    fetchAllClasificacion(),
+  ]);
+  const base = buildClasificacionItems(repuestos, clasificacion, new Map());
+  const extra = new Map(repuestos.map((row) => [row.codigo, row]));
+  let fechaActualizacionTabla: string | null = null;
+  const items: RepuestoJoinRow[] = base.map((row) => {
+    const src = extra.get(row.codigo);
+    const lastSync = src?.last_sync_at ?? null;
+    if (
+      lastSync &&
+      (!fechaActualizacionTabla || lastSync > fechaActualizacionTabla)
+    ) {
+      fechaActualizacionTabla = lastSync;
+    }
+    return {
+      ...row,
+      ultimo_ingreso: src?.ultimo_ingreso ?? null,
+      last_sync_at: lastSync,
+    };
+  });
+  return { items, fechaActualizacionTabla };
 }
 
 export const INSERT_BATCH_SIZE = 500;

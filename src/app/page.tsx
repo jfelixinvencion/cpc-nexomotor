@@ -9,6 +9,7 @@ import {
   Car,
   ClipboardList,
   FolderCog,
+  LayoutDashboard,
   LogOut,
   Package,
   Settings,
@@ -28,6 +29,7 @@ import LogisticaDashboard from "@/components/LogisticaDashboard";
 import PerfilesDashboard from "@/components/PerfilesDashboard";
 import UsuariosDashboard from "@/components/UsuariosDashboard";
 import RepuestosClasificacionTab from "@/components/RepuestosClasificacionTab";
+import DashboardInventarioTab from "@/components/DashboardInventarioTab";
 import {
   AUTH_CHANGED_EVENT,
   invalidatePermisosCache,
@@ -40,7 +42,8 @@ type View =
   | "dashboard"
   | "warehouse"
   | "administracion"
-  | "logistica";
+  | "logistica"
+  | "tablero";
 type WarehouseTab = "herramientas" | "consumibles" | "stock_actual";
 type AdminTab =
   | "planilla"
@@ -49,7 +52,7 @@ type AdminTab =
   | "repuestos"
   | "perfiles"
   | "usuarios";
-type ActiveAreaId = "almacen" | "administracion" | "logistica";
+type ActiveAreaId = "almacen" | "administracion" | "logistica" | "tablero";
 
 const SESSION_KEY = "nexo_session";
 const VIEW_KEY = "nexo_view";
@@ -59,6 +62,7 @@ const PERSISTABLE_VIEWS: View[] = [
   "warehouse",
   "administracion",
   "logistica",
+  "tablero",
 ];
 
 type NexoSession = {
@@ -115,6 +119,18 @@ const MOCK_USER = "Admin";
 const MOCK_PASSWORD = "NexoMotor";
 
 const areaBlocks = [
+  {
+    id: "tablero",
+    title: "DASHBOARD",
+    description: "Valorización e indicadores de inventario.",
+    icon: LayoutDashboard,
+    active: true,
+    iconBg: "bg-white/20",
+    cardClass:
+      "border-teal-500/20 bg-gradient-to-br from-teal-600 to-teal-800 text-white shadow-lg shadow-teal-600/25 hover:-translate-y-1 hover:shadow-xl",
+    descriptionClass: "text-teal-100",
+    ctaClass: "text-teal-100",
+  },
   {
     id: "almacen",
     title: "ALMACÉN",
@@ -536,7 +552,7 @@ function DashboardView({
           Panel principal
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted sm:text-base">
-          Selecciona un área para continuar. Almacén, Administración y
+          Selecciona un área para continuar. Dashboard, Almacén, Administración y
           Logística están listos para operar.
         </p>
       </div>
@@ -835,6 +851,58 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
   );
 }
 
+function TableroView() {
+  const { cargando, puede } = usePermisos();
+  const canInventario = puede("dashboard", "inventario", "ver");
+
+  return (
+    <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h1 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
+          Dashboard
+        </h1>
+        <span className="inline-flex items-center gap-1 rounded-full bg-teal-600/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
+          <LayoutDashboard className="h-3 w-3" aria-hidden />
+          Módulo activo
+        </span>
+        <p className="hidden text-xs text-muted sm:inline">
+          Indicadores de inventario y valorización del taller.
+        </p>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-surface shadow-md shadow-slate-200/50">
+        <div
+          role="tablist"
+          aria-label="Secciones de dashboard"
+          className="flex border-b border-border bg-slate-50/80"
+        >
+          {canInventario ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected
+              className="relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2 text-sm font-semibold text-teal-700 sm:px-5"
+            >
+              <LayoutDashboard className="h-4 w-4" aria-hidden />
+              <span className="truncate">Inventario</span>
+              <span className="absolute inset-x-0 bottom-0 h-0.5 bg-teal-600" />
+            </button>
+          ) : null}
+        </div>
+        <div role="tabpanel" className="p-3 sm:p-4">
+          {!cargando && !canInventario ? (
+            <p className="px-3 py-8 text-center text-sm text-muted">
+              No tiene permiso para ver el dashboard de inventario.
+            </p>
+          ) : canInventario ? (
+            <DashboardInventarioTab />
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function LogisticaView() {
   return (
     <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
@@ -914,6 +982,10 @@ export default function Home() {
       setView("logistica");
       return;
     }
+    if (areaId === "tablero") {
+      setView("tablero");
+      return;
+    }
     setView("administracion");
   }
 
@@ -921,7 +993,8 @@ export default function Home() {
     if (
       view === "warehouse" ||
       view === "administracion" ||
-      view === "logistica"
+      view === "logistica" ||
+      view === "tablero"
     ) {
       setView("dashboard");
       return;
@@ -935,11 +1008,13 @@ export default function Home() {
     view === "warehouse" ||
     view === "administracion" ||
     view === "logistica" ||
+    view === "tablero" ||
     view === "login";
   const backLabel =
     view === "warehouse" ||
     view === "administracion" ||
-    view === "logistica"
+    view === "logistica" ||
+    view === "tablero"
       ? "Panel"
       : "Inicio";
 
@@ -975,6 +1050,7 @@ export default function Home() {
         <AdministracionView onBack={() => setView("dashboard")} />
       )}
       {view === "logistica" && isAuthenticated && <LogisticaView />}
+      {view === "tablero" && isAuthenticated && <TableroView />}
     </AppShell>
   );
 }
