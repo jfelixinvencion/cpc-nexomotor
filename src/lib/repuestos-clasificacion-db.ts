@@ -1,8 +1,10 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
   asNullableText,
-  calcularRotacion,
   calcularStockOutDias,
+  diasSinRotacion,
+  isSkuExcluido,
+  rotacionDesdeDias,
   isObsolescencia,
   isTipoSku,
   type ImportFilaRaw,
@@ -69,7 +71,7 @@ export async function fetchAllRepuestosMinimos(): Promise<RepuestoMin[]> {
   const items: RepuestoMin[] = [];
   for (const row of rows) {
     const codigo = asNullableText(row.codigo);
-    if (!codigo) continue;
+    if (!codigo || isSkuExcluido(codigo)) continue;
     items.push({
       codigo,
       repuesto: asNullableText(row.repuesto),
@@ -156,6 +158,7 @@ export function buildClasificacionItems(
   return repuestos.map((row) => {
     const clasif = clasifByCodigo.get(row.codigo);
     const consumo = clasif?.consumo_prom_dia ?? null;
+    const dias = diasSinRotacion(row, now);
     return {
       codigo: row.codigo,
       descripcion: row.repuesto,
@@ -165,7 +168,8 @@ export function buildClasificacionItems(
       tipo_sku: clasif?.tipo_sku ?? null,
       categoria: clasif?.categoria ?? null,
       sub_categoria: clasif?.sub_categoria ?? null,
-      rotacion: calcularRotacion(row.ultimo_egreso, now),
+      dias_sin_rotacion: dias,
+      rotacion: rotacionDesdeDias(dias),
       obsolescencia: clasif?.obsolescencia ?? null,
       consumo_prom_dia: consumo,
       proveedor: proveedores.get(row.codigo) ?? null,
@@ -319,6 +323,7 @@ export async function importarClasificacion(
       errores.push(built.error);
       continue;
     }
+    if (isSkuExcluido(built.patch.codigo)) continue;
     const canonical = resolveRepuestoCodigo(built.patch.codigo, codigoIndex);
     if (!canonical) {
       errores.push({

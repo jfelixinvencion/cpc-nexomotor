@@ -7,9 +7,13 @@ export const TIPO_SKU_VALUES = [
 
 export const OBSOLESCENCIA_VALUES = ["Si", "No"] as const;
 
+/** SKUs fantasma que no deben listarse ni sincronizarse (siguen en public.repuestos). */
+export const SKUS_EXCLUIDOS = ["INSUMOS-MATERIALES"] as const;
+
 export type TipoSku = (typeof TIPO_SKU_VALUES)[number];
 export type Obsolescencia = (typeof OBSOLESCENCIA_VALUES)[number];
 export type Rotacion = "Sin Rotación" | "Con Rotación";
+export type RotacionEstado = Rotacion | "Sin dato";
 
 export type RepuestoClasificacionRow = {
   codigo: string;
@@ -20,7 +24,8 @@ export type RepuestoClasificacionRow = {
   tipo_sku: TipoSku | null;
   categoria: string | null;
   sub_categoria: string | null;
-  rotacion: Rotacion;
+  dias_sin_rotacion: number | null;
+  rotacion: RotacionEstado;
   obsolescencia: Obsolescencia | null;
   consumo_prom_dia: number | string | null;
   proveedor: string | null;
@@ -77,13 +82,32 @@ export function isObsolescencia(value: unknown): value is Obsolescencia {
   );
 }
 
+export function diasSinRotacion(
+  item: {
+    ultimo_egreso?: string | number | null;
+    ultimo_ingreso?: string | number | null;
+  },
+  now: Date = new Date()
+): number | null {
+  const parsed =
+    parseRepuestoDate(item.ultimo_egreso) ??
+    parseRepuestoDate(item.ultimo_ingreso);
+  if (!parsed) return null;
+  const days = Math.floor((now.getTime() - parsed.getTime()) / MS_PER_DAY);
+  return Number.isFinite(days) ? Math.max(0, days) : null;
+}
+
+export function rotacionDesdeDias(days: number | null): RotacionEstado {
+  if (days == null) return "Sin dato";
+  return days > 45 ? "Sin Rotación" : "Con Rotación";
+}
+
 export function calcularRotacion(
   ultimoEgreso: string | number | null | undefined,
   now: Date = new Date()
 ): Rotacion {
-  const parsed = parseRepuestoDate(ultimoEgreso);
-  if (!parsed) return "Sin Rotación";
-  const days = (now.getTime() - parsed.getTime()) / MS_PER_DAY;
+  const days = diasSinRotacion({ ultimo_egreso: ultimoEgreso ?? null }, now);
+  if (days == null) return "Sin Rotación";
   return days > 45 ? "Sin Rotación" : "Con Rotación";
 }
 
@@ -112,6 +136,13 @@ export function asNullableText(value: unknown): string | null {
   if (value == null) return null;
   const text = String(value).trim();
   return text === "" ? null : text;
+}
+
+export function isSkuExcluido(codigo: string | null | undefined): boolean {
+  const key = asNullableText(codigo);
+  if (!key) return false;
+  const normalized = key.toLowerCase();
+  return SKUS_EXCLUIDOS.some((sku) => sku.toLowerCase() === normalized);
 }
 
 export type ImportFilaRaw = {

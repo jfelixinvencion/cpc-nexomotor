@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enforceIfRealSession } from "@/lib/auth/require";
+import { isSkuExcluido } from "@/lib/repuestos-clasificacion";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const PAGE_SIZE = 1000;
@@ -56,7 +57,11 @@ export async function GET(request: NextRequest) {
       }
 
       const rows = (data ?? []) as Record<string, unknown>[];
-      for (const row of rows) items.push(mapRow(row));
+      for (const row of rows) {
+        const mapped = mapRow(row);
+        if (isSkuExcluido(mapped.codigo)) continue;
+        items.push(mapped);
+      }
       if (rows.length < PAGE_SIZE) break;
     }
 

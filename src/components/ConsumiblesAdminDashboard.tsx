@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { usePermisos } from "@/lib/auth/usePermisos";
+import { isSkuExcluido } from "@/lib/repuestos-clasificacion";
 
 type Consumible = {
   id: number;
@@ -190,10 +191,12 @@ export default function ConsumiblesAdminDashboard() {
         }
 
         setOptions(
-          ((data as Record<string, unknown>[]) ?? []).map((row) => ({
-            codigo: asText(row.codigo),
-            repuesto: asText(row.repuesto),
-          }))
+          ((data as Record<string, unknown>[]) ?? [])
+            .map((row) => ({
+              codigo: asText(row.codigo),
+              repuesto: asText(row.repuesto),
+            }))
+            .filter((row) => !isSkuExcluido(row.codigo))
         );
         setSearching(false);
         setDropdownOpen(true);

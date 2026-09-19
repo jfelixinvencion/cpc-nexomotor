@@ -4,6 +4,7 @@ import { enforceIfRealSession } from "@/lib/auth/require";
 import {
   asNullableText,
   isObsolescencia,
+  isSkuExcluido,
   isTipoSku,
   type Obsolescencia,
   type TipoSku,
@@ -51,6 +52,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return NextResponse.json(
       { success: false, error: "Código inválido." },
       { status: 400 }
+    );
+  }
+  if (isSkuExcluido(codigo)) {
+    return NextResponse.json(
+      { success: false, error: "SKU excluido." },
+      { status: 404 }
     );
   }
 
