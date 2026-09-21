@@ -10,6 +10,9 @@ export const OBSOLESCENCIA_VALUES = ["Si", "No"] as const;
 /** SKUs fantasma que no deben listarse ni sincronizarse (siguen en public.repuestos). */
 export const SKUS_EXCLUIDOS = ["INSUMOS-MATERIALES"] as const;
 
+/** Días sin movimiento a partir de los cuales un SKU se considera sin rotación. */
+export const DIAS_UMBRAL_SIN_ROTACION = 60;
+
 export type TipoSku = (typeof TIPO_SKU_VALUES)[number];
 export type Obsolescencia = (typeof OBSOLESCENCIA_VALUES)[number];
 export type Rotacion = "Sin Rotación" | "Con Rotación";
@@ -99,16 +102,17 @@ export function diasSinRotacion(
 
 export function rotacionDesdeDias(days: number | null): RotacionEstado {
   if (days == null) return "Sin dato";
-  return days > 45 ? "Sin Rotación" : "Con Rotación";
+  return days > DIAS_UMBRAL_SIN_ROTACION ? "Sin Rotación" : "Con Rotación";
 }
 
 export function calcularRotacion(
   ultimoEgreso: string | number | null | undefined,
   now: Date = new Date()
 ): Rotacion {
-  const days = diasSinRotacion({ ultimo_egreso: ultimoEgreso ?? null }, now);
-  if (days == null) return "Sin Rotación";
-  return days > 45 ? "Sin Rotación" : "Con Rotación";
+  const estado = rotacionDesdeDias(
+    diasSinRotacion({ ultimo_egreso: ultimoEgreso ?? null }, now)
+  );
+  return estado === "Sin dato" ? "Sin Rotación" : estado;
 }
 
 export function calcularStockOutDias(
