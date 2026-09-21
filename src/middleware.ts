@@ -8,6 +8,7 @@ const PUBLIC_API_PATHS = new Set([
   "/api/sync-stock",
   "/api/sync-work-orders",
   "/api/sync-purchase-orders",
+  "/api/sync-ventas-taller",
   "/api/logistica/sync-inversa",
 ]);
 
