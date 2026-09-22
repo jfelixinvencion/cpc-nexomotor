@@ -22,12 +22,14 @@ import {
   RotateCcw,
   ShoppingCart,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase/client";
 import LogisticaComprasTab from "@/components/LogisticaComprasTab";
 import LogisticaControlDocumentarioTab from "@/components/LogisticaControlDocumentarioTab";
+import LogisticaVentasTallerTab from "@/components/LogisticaVentasTallerTab";
 import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 const INVERSA_PAGE_SIZE = 200;
@@ -108,7 +110,12 @@ type PendienteForm = {
   observaciones: string;
 };
 
-type LogisticaTab = "control-ot" | "inversa" | "compras" | "documentario";
+type LogisticaTab =
+  | "control-ot"
+  | "inversa"
+  | "compras"
+  | "documentario"
+  | "ventas_taller";
 type InversaSubTab = "historial" | "pendientes";
 type GestionEstadoFiltro = "vendido" | "certificado" | "pendiente" | "vacios";
 
@@ -449,6 +456,7 @@ export default function LogisticaDashboard() {
   const canVerInversa = puede("logistica", "inversa", "ver");
   const canVerCompras = puede("logistica", "compras", "ver");
   const canVerDocumentario = puede("logistica", "control_documentario", "ver");
+  const canVerVentasTaller = puede("logistica", "ventas_taller", "ver");
   const canExportInversa = puede("logistica", "inversa", "exportar");
   const canSyncInversa = puede("logistica", "inversa", "sincronizar");
   const canEditarInversa = puede("logistica", "inversa", "editar");
@@ -458,7 +466,8 @@ export default function LogisticaDashboard() {
     if (tab === "inversa" && !canVerInversa) setTab("control-ot");
     else if (tab === "compras" && !canVerCompras) setTab("control-ot");
     else if (tab === "documentario" && !canVerDocumentario) setTab("control-ot");
-  }, [tab, canVerInversa, canVerCompras, canVerDocumentario]);
+    else if (tab === "ventas_taller" && !canVerVentasTaller) setTab("control-ot");
+  }, [tab, canVerInversa, canVerCompras, canVerDocumentario, canVerVentasTaller]);
 
   // --- Control OT ---
   const [items, setItems] = useState<DetalleOtPendiente[]>([]);
@@ -1540,6 +1549,21 @@ export default function LogisticaDashboard() {
           ) : null}
         </button>
         ) : null}
+        {canVerVentasTaller ? (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "ventas_taller"}
+          onClick={() => setTab("ventas_taller")}
+          className={tabButtonClass(tab === "ventas_taller")}
+        >
+          <Wrench className="h-4 w-4" aria-hidden />
+          <span className="truncate">Ventas_Taller</span>
+          {tab === "ventas_taller" ? (
+            <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          ) : null}
+        </button>
+        ) : null}
       </div>
 
       {tab === "control-ot" ? (
@@ -2198,6 +2222,9 @@ export default function LogisticaDashboard() {
       {tab === "compras" && canVerCompras ? <LogisticaComprasTab /> : null}
       {tab === "documentario" && canVerDocumentario ? (
         <LogisticaControlDocumentarioTab />
+      ) : null}
+      {tab === "ventas_taller" && canVerVentasTaller ? (
+        <LogisticaVentasTallerTab />
       ) : null}
     </div>
   );
