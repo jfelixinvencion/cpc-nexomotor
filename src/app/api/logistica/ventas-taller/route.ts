@@ -158,6 +158,7 @@ export async function GET(request: NextRequest) {
     }
 
     const search = (sp.get("search") ?? "").trim();
+    const otExact = (sp.get("ot") ?? "").trim();
     const states = parseStates(sp.get("states"));
     const tipoOt = parseFilterValues(sp.get("tipo_ot"));
     const tipos = parseFilterValues(sp.get("tipos"));
@@ -177,6 +178,7 @@ export async function GET(request: NextRequest) {
       .order("ot", { ascending: false })
       .order("id", { ascending: false });
 
+    if (otExact) query = query.eq("ot", otExact);
     if (states.length > 0) query = query.in("estado", states);
     if (tipoOt.length > 0) query = query.in("tipo_ot", tipoOt);
     if (tipos.length > 0) query = query.in("tipo", tipos);
