@@ -290,7 +290,7 @@ export function parseDashboardQuery(
   }
 
   let from = fromRaw || defaultTrendFrom(today);
-  let to = toRaw || today;
+  const to = toRaw || today;
   if (from > to) {
     return { ok: false, error: "from no puede ser mayor que to." };
   }
