@@ -30,6 +30,7 @@ import PerfilesDashboard from "@/components/PerfilesDashboard";
 import UsuariosDashboard from "@/components/UsuariosDashboard";
 import RepuestosClasificacionTab from "@/components/RepuestosClasificacionTab";
 import DashboardInventarioTab from "@/components/DashboardInventarioTab";
+import DashboardVentasTallerTab from "@/components/DashboardVentasTallerTab";
 import {
   AUTH_CHANGED_EVENT,
   invalidatePermisosCache,
@@ -854,6 +855,21 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
 function TableroView() {
   const { cargando, puede } = usePermisos();
   const canInventario = puede("dashboard", "inventario", "ver");
+  const canVentasTaller = puede("dashboard", "ventas_taller", "ver");
+  const [tab, setTab] = useState<"inventario" | "ventas_taller">("inventario");
+
+  useEffect(() => {
+    if (tab === "inventario" && !canInventario && canVentasTaller) {
+      setTab("ventas_taller");
+    } else if (tab === "ventas_taller" && !canVentasTaller && canInventario) {
+      setTab("inventario");
+    }
+  }, [tab, canInventario, canVentasTaller]);
+
+  const tabClass = (active: boolean) =>
+    active
+      ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2 text-sm font-semibold text-teal-700 sm:px-5"
+      : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
 
   return (
     <section className="mx-auto max-w-7xl px-3 py-3 sm:px-4 sm:py-4">
@@ -880,22 +896,42 @@ function TableroView() {
             <button
               type="button"
               role="tab"
-              aria-selected
-              className="relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2 text-sm font-semibold text-teal-700 sm:px-5"
+              aria-selected={tab === "inventario"}
+              onClick={() => setTab("inventario")}
+              className={tabClass(tab === "inventario")}
             >
               <LayoutDashboard className="h-4 w-4" aria-hidden />
               <span className="truncate">Inventario</span>
-              <span className="absolute inset-x-0 bottom-0 h-0.5 bg-teal-600" />
+              {tab === "inventario" ? (
+                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-teal-600" />
+              ) : null}
+            </button>
+          ) : null}
+          {canVentasTaller ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "ventas_taller"}
+              onClick={() => setTab("ventas_taller")}
+              className={tabClass(tab === "ventas_taller")}
+            >
+              <Wrench className="h-4 w-4" aria-hidden />
+              <span className="truncate">Ventas_Taller</span>
+              {tab === "ventas_taller" ? (
+                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-teal-600" />
+              ) : null}
             </button>
           ) : null}
         </div>
         <div role="tabpanel" className="p-3 sm:p-4">
-          {!cargando && !canInventario ? (
+          {!cargando && !canInventario && !canVentasTaller ? (
             <p className="px-3 py-8 text-center text-sm text-muted">
-              No tiene permiso para ver el dashboard de inventario.
+              No tiene permiso para ver las pestañas del dashboard.
             </p>
-          ) : canInventario ? (
+          ) : tab === "inventario" && canInventario ? (
             <DashboardInventarioTab />
+          ) : tab === "ventas_taller" && canVentasTaller ? (
+            <DashboardVentasTallerTab />
           ) : null}
         </div>
       </div>

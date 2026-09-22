@@ -204,6 +204,11 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
         label: "Inventario",
         acciones: acciones(["ver"]),
       },
+      {
+        pestana: "ventas_taller",
+        label: "Ventas_Taller",
+        acciones: acciones(["ver"]),
+      },
     ],
   },
 ];
