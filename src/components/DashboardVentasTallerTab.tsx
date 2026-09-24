@@ -14,8 +14,10 @@ import {
   type ActiveElement,
   type ChartEvent,
 } from "chart.js";
+import ChartDataLabels from "chartjs-plugin-datalabels";
 import { Bar, Doughnut, Line } from "react-chartjs-2";
 import { Eye, Loader2, RotateCcw, X } from "lucide-react";
+import { DASHBOARD_COLORS } from "@/lib/dashboard-inventario";
 import {
   MIN_FECHA,
   TIPOS_LINEA,
@@ -43,17 +45,35 @@ ChartJS.register(
   LineElement,
   PointElement,
   Tooltip,
-  Legend
+  Legend,
+  ChartDataLabels
 );
 
 const COLORS = {
-  venta: "#4F46E5",
-  costo: "#D97706",
-  margen: "#0F766E",
-  facturado: "#0F766E",
-  abierto: "#2563EB",
-  correctivo: "#D85A30",
-  siniestro: "#7C3AED",
+  venta: DASHBOARD_COLORS.Consumible,
+  costo: DASHBOARD_COLORS.Correctivo,
+  margen: DASHBOARD_COLORS.Preventivo,
+  facturado: DASHBOARD_COLORS.Preventivo,
+  abierto: "#94A3B8",
+  correctivo: DASHBOARD_COLORS.Correctivo,
+  siniestro: DASHBOARD_COLORS.Herramienta,
+};
+
+const HIDE_DATALABELS = { datalabels: { display: false as const } };
+
+const BAR_DATALABELS = {
+  datalabels: {
+    anchor: "end" as const,
+    align: "end" as const,
+    offset: 0,
+    clamp: true,
+    rotation: -42,
+    color: "#0f172a",
+    font: { size: 9, weight: 700 as const },
+    formatter: (value: number) => formatCompact(Number(value)),
+    display: (ctx: { dataset: { data: unknown[] }; dataIndex: number }) =>
+      Number(ctx.dataset.data[ctx.dataIndex] ?? 0) !== 0,
+  },
 };
 
 type DrawerKind = "tipo_ot" | "marca" | "estado";
@@ -68,6 +88,24 @@ function formatSoles(value: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function formatCompact(value: number) {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    return `${sign}${(abs / 1_000_000).toLocaleString("es-PE", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })}M`;
+  }
+  if (abs >= 1000) {
+    return `${sign}${(abs / 1000).toLocaleString("es-PE", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    })}k`;
+  }
+  return `${sign}${Math.round(abs).toLocaleString("es-PE")}`;
 }
 
 function formatFecha(value: string | null | undefined) {
@@ -316,6 +354,31 @@ function ResumenMensualView() {
     );
     return marcasExpanded ? rows : rows.slice(0, 10);
   }, [data, marcasExpanded]);
+  const marcasTotal = useMemo(() => {
+    const rows = data?.preventivo_by_marca ?? [];
+    const ots = rows.reduce((sum, row) => sum + row.ots, 0);
+    const venta = rows.reduce((sum, row) => sum + row.venta, 0);
+    const costo = rows.reduce((sum, row) => sum + row.costo, 0);
+    const margen = rows.reduce((sum, row) => sum + row.margen, 0);
+    return {
+      ots,
+      venta,
+      costo,
+      margen,
+      margenOt: ots > 0 ? margen / ots : 0,
+      margenPct: venta > 0 ? (margen / venta) * 100 : 0,
+    };
+  }, [data]);
+  const timeline = useMemo(
+    () =>
+      buildTimeline(
+        data?.correctivo_siniestro_by_date ?? [],
+        data?.filters.from ?? bounds.start,
+        data?.filters.to ?? bounds.end,
+        todayYmd()
+      ),
+    [bounds.end, bounds.start, data]
+  );
 
   const empty = Boolean(data && data.cards.ots_totales === 0);
 
@@ -446,11 +509,12 @@ function ResumenMensualView() {
 
       {data && !empty ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
             <KpiCard
               title="Venta Total (S/)"
               value={formatSoles(data.cards.venta_total_soles)}
               detail={`Facturado: ${formatSoles(facturado?.venta ?? 0)} · Abierto: ${formatSoles(abierto?.venta ?? 0)}`}
+              featured
             />
             <KpiCard
               title="Costo Total (S/)"
@@ -509,7 +573,18 @@ function ResumenMensualView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  layout: { padding: { top: 16, right: 8 } },
+                  plugins: {
+                    legend: { position: "bottom" },
+                    ...BAR_DATALABELS,
+                    tooltip: {
+                      callbacks: {
+                        label(ctx) {
+                          return ` ${ctx.dataset.label}: ${formatSoles(Number(ctx.raw ?? 0))}`;
+                        },
+                      },
+                    },
+                  },
                   onClick: (_: ChartEvent, elements: ActiveElement[]) => {
                     const idx = elements[0]?.index;
                     if (idx == null) return;
@@ -555,7 +630,18 @@ function ResumenMensualView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  layout: { padding: { top: 16, right: 8 } },
+                  plugins: {
+                    legend: { position: "bottom" },
+                    ...BAR_DATALABELS,
+                    tooltip: {
+                      callbacks: {
+                        label(ctx) {
+                          return ` ${ctx.dataset.label}: ${formatSoles(Number(ctx.raw ?? 0))}`;
+                        },
+                      },
+                    },
+                  },
                 }}
               />
             </ChartCard>
@@ -569,7 +655,7 @@ function ResumenMensualView() {
                       label: "Venta",
                       data: [facturado?.venta ?? 0, abierto?.venta ?? 0],
                       backgroundColor: [COLORS.facturado, COLORS.abierto],
-                      borderWidth: 1,
+                      borderWidth: 0,
                     },
                   ],
                 }}
@@ -577,6 +663,12 @@ function ResumenMensualView() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
+                    datalabels: {
+                      color: "#fff",
+                      font: { weight: 700, size: 9 },
+                      formatter: (value: number) =>
+                        Number(value) === 0 ? "" : formatCompact(Number(value)),
+                    },
                     legend: {
                       position: "bottom",
                       labels: {
@@ -664,15 +756,15 @@ function ResumenMensualView() {
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                <thead className="bg-teal-50 text-[10px] font-semibold uppercase tracking-wide text-teal-800">
                   <tr>
-                    <th className="px-2 py-1.5">Marca</th>
-                    <th className="px-2 py-1.5 text-right">OTs</th>
-                    <th className="px-2 py-1.5 text-right">Venta</th>
-                    <th className="px-2 py-1.5 text-right">Costo</th>
-                    <th className="px-2 py-1.5 text-right">Margen</th>
-                    <th className="px-2 py-1.5 text-right">Margen / OT</th>
-                    <th className="px-2 py-1.5 text-right">Margen %</th>
+                    <th className="px-2 py-1.5 text-left">Marca</th>
+                    <th className="px-2 py-1.5 text-center">OTs</th>
+                    <th className="px-2 py-1.5 text-center">Venta</th>
+                    <th className="px-2 py-1.5 text-center">Costo</th>
+                    <th className="px-2 py-1.5 text-center">Margen</th>
+                    <th className="px-2 py-1.5 text-center">Margen / OT</th>
+                    <th className="px-2 py-1.5 text-center">Margen %</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -693,14 +785,14 @@ function ResumenMensualView() {
                       }
                     >
                       <td className="px-2 py-1.5 font-medium">{row.key}</td>
-                      <td className="px-2 py-1.5 text-right">{row.ots}</td>
-                      <td className="px-2 py-1.5 text-right">{formatSoles(row.venta)}</td>
-                      <td className="px-2 py-1.5 text-right">{formatSoles(row.costo)}</td>
-                      <td className="px-2 py-1.5 text-right">{formatSoles(row.margen)}</td>
-                      <td className="px-2 py-1.5 text-right">
+                      <td className="px-2 py-1.5 text-center">{row.ots}</td>
+                      <td className="px-2 py-1.5 text-center">{formatSoles(row.venta)}</td>
+                      <td className="px-2 py-1.5 text-center">{formatSoles(row.costo)}</td>
+                      <td className="px-2 py-1.5 text-center">{formatSoles(row.margen)}</td>
+                      <td className="px-2 py-1.5 text-center">
                         {formatSoles(row.ots > 0 ? row.margen / row.ots : 0)}
                       </td>
-                      <td className="px-2 py-1.5 text-right">
+                      <td className="px-2 py-1.5 text-center">
                         {row.margen_porcentaje.toLocaleString("es-PE", {
                           minimumFractionDigits: 1,
                           maximumFractionDigits: 1,
@@ -709,20 +801,97 @@ function ResumenMensualView() {
                       </td>
                     </tr>
                   ))}
+                  <tr className="border-t-2 border-teal-200 bg-teal-50 font-bold text-teal-900">
+                    <td className="px-2 py-1.5">Subtotal</td>
+                    <td className="px-2 py-1.5 text-center">{marcasTotal.ots}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      {formatSoles(marcasTotal.venta)}
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      {formatSoles(marcasTotal.costo)}
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      {formatSoles(marcasTotal.margen)}
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      {formatSoles(marcasTotal.margenOt)}
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      {marcasTotal.margenPct.toLocaleString("es-PE", {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 1,
+                      })}
+                      %
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
           </div>
 
           <ChartCard title="Correctivo y Siniestro en el tiempo">
+            {timeline.dates.length === 0 ? (
+              <p className="flex h-full items-center justify-center text-sm text-muted">
+                No hay Correctivo ni Siniestro en el rango seleccionado.
+              </p>
+            ) : (
             <Line
-              data={buildTimeline(data.correctivo_siniestro_by_date)}
+              data={timeline.chart}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { position: "bottom" } },
+                interaction: { mode: "index", intersect: false },
+                plugins: {
+                  legend: { position: "bottom" },
+                  datalabels: {
+                    display(ctx) {
+                      if (ctx.dataset.label !== "Costo") return false;
+                      const total = ctx.chart.data.labels?.length ?? 0;
+                      const idx = ctx.dataIndex;
+                      if (total <= 12) return true;
+                      return idx === total - 1 || idx % 3 === 0;
+                    },
+                    align: "center",
+                    anchor: "center",
+                    offset: 0,
+                    clamp: false,
+                    color: "#111827",
+                    backgroundColor: "rgba(255,255,255,0.82)",
+                    borderRadius: 3,
+                    padding: { top: 1, bottom: 1, left: 3, right: 3 },
+                    textStrokeColor: "#ffffff",
+                    textStrokeWidth: 2,
+                    font: { size: 11, weight: 700 },
+                    formatter: (value: number) => formatCompact(Number(value)),
+                  },
+                  tooltip: {
+                    enabled: false,
+                    mode: "index",
+                    intersect: false,
+                    external(ctx) {
+                      renderTimelineTooltip(ctx, timeline);
+                    },
+                  },
+                },
+                onClick: (_: ChartEvent, elements: ActiveElement[]) => {
+                  const idx = elements[0]?.index;
+                  if (idx == null) return;
+                  const fecha = timeline.dates[idx];
+                  if (!fecha) return;
+                  setDrawer({
+                    kind: "tipo_ot",
+                    title: `Correctivo y Siniestro · ${formatFecha(fecha)}`,
+                    rows: data.ots.filter(
+                      (ot) =>
+                        (ot.tipo_ot === "Correctivo" ||
+                          ot.tipo_ot === "Siniestro") &&
+                        ot.fecha === fecha
+                    ),
+                  });
+                },
               }}
             />
+            )}
           </ChartCard>
         </>
       ) : null}
@@ -1081,11 +1250,12 @@ function TendenciaOperativaView() {
 
       {data && !empty ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
             <KpiCard
               title="Venta Total (S/)"
               value={formatSoles(data.cards.venta_total_soles)}
               detail={`Facturado: ${formatSoles(facturado?.venta ?? 0)} · Abierto: ${formatSoles(abierto?.venta ?? 0)}`}
+              featured
             />
             <KpiCard
               title="Costo Total (S/)"
@@ -1126,6 +1296,7 @@ function TendenciaOperativaView() {
                       data: data.trend.map((row) => row.costo),
                       borderColor: COLORS.costo,
                       backgroundColor: COLORS.costo,
+                      borderDash: [4, 3],
                       tension: 0.25,
                     },
                     {
@@ -1140,7 +1311,7 @@ function TendenciaOperativaView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  plugins: { legend: { position: "bottom" }, ...HIDE_DATALABELS },
                   onClick: (_: ChartEvent, elements: ActiveElement[]) => {
                     const idx = elements[0]?.index;
                     if (idx != null) openMonth(idx);
@@ -1168,7 +1339,7 @@ function TendenciaOperativaView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  plugins: { legend: { position: "bottom" }, ...HIDE_DATALABELS },
                   onClick: (_: ChartEvent, elements: ActiveElement[]) => {
                     const idx = elements[0]?.index;
                     if (idx != null) openMonth(idx);
@@ -1194,7 +1365,7 @@ function TendenciaOperativaView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  plugins: { legend: { position: "bottom" }, ...HIDE_DATALABELS },
                   scales: {
                     x: { stacked: true },
                     y: { stacked: true },
@@ -1226,7 +1397,7 @@ function TendenciaOperativaView() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
+                  plugins: { legend: { position: "bottom" }, ...HIDE_DATALABELS },
                   onClick: (_: ChartEvent, elements: ActiveElement[]) => {
                     const idx = elements[0]?.index;
                     if (idx != null) openAging(idx);
@@ -1265,50 +1436,164 @@ function TendenciaOperativaView() {
   );
 }
 
-function buildTimeline(
-  rows: Array<MoneyByKey & { fecha: string; tipo_ot: string }>
-) {
-  const dates = Array.from(new Set(rows.map((row) => row.fecha).filter(Boolean))).sort();
-  const pick = (tipo: string, field: "venta" | "costo") =>
-    dates.map(
-      (fecha) =>
-        rows.find((row) => row.fecha === fecha && row.tipo_ot === tipo)?.[field] ?? 0
-    );
+function daysInRangeYmd(from: string, to: string) {
+  const out: string[] = [];
+  if (!from || !to || from > to) return out;
+  let cursor = from;
+  while (cursor <= to) {
+    out.push(cursor);
+    const [y, m, d] = cursor.split("-").map(Number);
+    cursor = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  }
+  return out;
+}
+
+function emptyTimeline() {
   return {
-    labels: dates.map(formatFecha),
-    datasets: [
-      {
-        label: "Correctivo · Venta",
-        data: pick("Correctivo", "venta"),
-        borderColor: COLORS.correctivo,
-        backgroundColor: COLORS.correctivo,
-        tension: 0.25,
-      },
-      {
-        label: "Correctivo · Costo",
-        data: pick("Correctivo", "costo"),
-        borderColor: COLORS.costo,
-        backgroundColor: COLORS.costo,
-        borderDash: [4, 3],
-        tension: 0.25,
-      },
-      {
-        label: "Siniestro · Venta",
-        data: pick("Siniestro", "venta"),
-        borderColor: COLORS.siniestro,
-        backgroundColor: COLORS.siniestro,
-        tension: 0.25,
-      },
-      {
-        label: "Siniestro · Costo",
-        data: pick("Siniestro", "costo"),
-        borderColor: "#94A3B8",
-        backgroundColor: "#94A3B8",
-        borderDash: [4, 3],
-        tension: 0.25,
-      },
-    ],
+    dates: [],
+    ventaDia: [],
+    costoDia: [],
+    margenDia: [],
+    ventaAcc: [],
+    costoAcc: [],
+    margenAcc: [],
+    chart: { labels: [], datasets: [] },
   };
+}
+
+function buildTimeline(
+  rows: Array<MoneyByKey & { fecha: string; tipo_ot: string }>,
+  from: string,
+  to: string,
+  today = todayYmd()
+) {
+  const hasMovement = rows.some(
+    (row) =>
+      Boolean(row.fecha) &&
+      (row.tipo_ot === "Correctivo" || row.tipo_ot === "Siniestro")
+  );
+  if (!from || !to || from > today || !hasMovement) {
+    return emptyTimeline();
+  }
+  const limit = to < today ? to : today;
+  const dates = daysInRangeYmd(from, limit);
+  const sumDay = (fecha: string, field: "venta" | "costo") =>
+    rows
+      .filter(
+        (row) =>
+          row.fecha === fecha &&
+          (row.tipo_ot === "Correctivo" || row.tipo_ot === "Siniestro")
+      )
+      .reduce((acc, row) => acc + (row[field] ?? 0), 0);
+  const ventaDia = dates.map((fecha) => sumDay(fecha, "venta"));
+  const costoDia = dates.map((fecha) => sumDay(fecha, "costo"));
+  const margenDia = ventaDia.map((value, i) => value - (costoDia[i] ?? 0));
+  const ventaAcc: number[] = [];
+  const costoAcc: number[] = [];
+  const margenAcc: number[] = [];
+  for (let i = 0; i < dates.length; i += 1) {
+    ventaAcc.push((ventaAcc[i - 1] ?? 0) + (ventaDia[i] ?? 0));
+    costoAcc.push((costoAcc[i - 1] ?? 0) + (costoDia[i] ?? 0));
+    margenAcc.push((ventaAcc[i] ?? 0) - (costoAcc[i] ?? 0));
+  }
+  return {
+    dates,
+    ventaDia,
+    costoDia,
+    margenDia,
+    ventaAcc,
+    costoAcc,
+    margenAcc,
+    chart: {
+      labels: dates.map(formatFecha),
+      datasets: [
+        {
+          label: "Venta",
+          data: ventaAcc,
+          borderColor: COLORS.venta,
+          backgroundColor: COLORS.venta,
+          tension: 0.25,
+        },
+        {
+          label: "Costo",
+          data: costoAcc,
+          borderColor: COLORS.costo,
+          backgroundColor: COLORS.costo,
+          borderDash: [4, 3],
+          tension: 0.25,
+          pointRadius: 3,
+          pointHoverRadius: 4,
+        },
+        {
+          label: "Margen",
+          data: margenAcc,
+          borderColor: COLORS.margen,
+          backgroundColor: COLORS.margen,
+          tension: 0.25,
+        },
+      ],
+    },
+  };
+}
+
+function renderTimelineTooltip(
+  context: {
+    chart: { canvas: HTMLCanvasElement };
+    tooltip: {
+      opacity: number;
+      caretX: number;
+      caretY: number;
+      dataPoints: Array<{ dataIndex: number }>;
+    };
+  },
+  timeline: ReturnType<typeof buildTimeline>
+) {
+  const tooltip = context.tooltip;
+  const id = "vt-cs-timeline-tooltip";
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = id;
+    el.style.position = "fixed";
+    el.style.pointerEvents = "none";
+    el.style.zIndex = "50";
+    el.style.transition = "opacity 80ms ease";
+    el.style.whiteSpace = "nowrap";
+    document.body.appendChild(el);
+  }
+  if (tooltip.opacity === 0 || tooltip.dataPoints.length === 0) {
+    el.style.opacity = "0";
+    return;
+  }
+  const i = tooltip.dataPoints[0]?.dataIndex ?? 0;
+  const row = (label: string, color: string, value: number) =>
+    `<div class="leading-snug"><span style="color:${color}">${label}:</span> <span class="font-bold" style="color:${color}">${formatSoles(value)}</span></div>`;
+  el.className =
+    "rounded-lg border border-border bg-white px-2.5 py-1.5 text-[11px] shadow-md";
+  el.innerHTML = `
+    <div class="mb-0.5 font-semibold text-slate-800">Fecha: ${formatFecha(timeline.dates[i] ?? "")}</div>
+    ${row("Venta", COLORS.venta, timeline.ventaAcc[i] ?? 0)}
+    ${row("Costo", COLORS.costo, timeline.costoAcc[i] ?? 0)}
+    ${row("Margen", COLORS.margen, timeline.margenAcc[i] ?? 0)}
+    <div class="my-1.5 border-t border-slate-200"></div>
+    <div class="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Del día:</div>
+    ${row("Venta", COLORS.venta, timeline.ventaDia[i] ?? 0)}
+    ${row("Costo", COLORS.costo, timeline.costoDia[i] ?? 0)}
+    ${row("Margen", COLORS.margen, timeline.margenDia[i] ?? 0)}
+  `;
+  const rect = context.chart.canvas.getBoundingClientRect();
+  const width = el.offsetWidth || 220;
+  const height = el.offsetHeight || 140;
+  const caretX = tooltip.caretX;
+  const caretY = tooltip.caretY;
+  const nearRight = caretX + width * 0.45 > rect.width - 12;
+  const nearTop = caretY < height + 16;
+  el.style.left = `${rect.left + caretX}px`;
+  el.style.top = `${rect.top + caretY}px`;
+  const xShift = nearRight ? "calc(-100% - 12px)" : "-50%";
+  const yShift = nearTop ? "12px" : "calc(-100% - 10px)";
+  el.style.transform = `translate(${xShift}, ${yShift})`;
+  el.style.opacity = "1";
 }
 
 function KpiCard({
@@ -1324,17 +1609,35 @@ function KpiCard({
 }) {
   return (
     <div
-      className={`rounded-xl border p-3 ${
+      className={`flex flex-col justify-center rounded-lg border px-2 py-1.5 ${
         featured
-          ? "border-teal-200 bg-teal-50/70"
+          ? "border-teal-700/20 bg-gradient-to-br from-teal-600 to-teal-800 text-white shadow-sm shadow-teal-700/20"
           : "border-border bg-white"
       }`}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <p
+        className={`text-[8px] font-semibold uppercase leading-none tracking-wide ${
+          featured ? "text-teal-100" : "text-slate-500"
+        }`}
+      >
         {title}
       </p>
-      <p className="mt-1 text-xl font-bold text-foreground">{value}</p>
-      {detail ? <p className="mt-1 text-[11px] text-slate-500">{detail}</p> : null}
+      <p
+        className={`mt-0.5 text-sm font-bold leading-tight ${
+          featured ? "text-white" : "text-foreground"
+        }`}
+      >
+        {value}
+      </p>
+      {detail ? (
+        <p
+          className={`mt-0.5 text-[8px] leading-tight ${
+            featured ? "text-teal-100/80" : "text-slate-500"
+          }`}
+        >
+          {detail}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1347,9 +1650,9 @@ function ChartCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-white p-3">
+    <div className="overflow-visible rounded-xl border border-border bg-white p-3">
       <h3 className="mb-2 text-sm font-semibold text-foreground">{title}</h3>
-      <div className="h-[260px]">{children}</div>
+      <div className="h-[260px] overflow-visible">{children}</div>
     </div>
   );
 }

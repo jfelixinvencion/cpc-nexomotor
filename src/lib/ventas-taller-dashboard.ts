@@ -62,12 +62,67 @@ export const DASHBOARD_COLUMNS = [
   "marca",
   "placa",
   "tipo",
+  "cliente",
   "fecha_ingreso",
   "fecha_facturacion",
   "precio_total_soles",
   "costo_total_soles",
   "margen_total_soles",
 ] as const;
+
+/** Clientes ST abiertos cuyo costo estimado es venta / 1.05. */
+export const ST_ABIERTO_CLIENTES_DIVISOR_105 = [
+  "LISTO TAXI S.A.C.",
+  "TRANSPORTES CARRARA S.A.C.",
+] as const;
+
+type DashboardSourceLine = VentasTallerDashLine & { cliente: string | null };
+
+function normalizeClienteNombre(value: string | null | undefined) {
+  return (value ?? "").trim().toLocaleUpperCase("es-PE");
+}
+
+/**
+ * En Excel/sync, las líneas ST de una OT ABIERTA llegan con
+ * costo_total_soles = 0 porque el origen aún no factura y no calculó
+ * el costo real. Eso infla el margen mientras la OT está abierta.
+ *
+ * Esta corrección es solo en memoria para tarjetas/gráficos del dashboard
+ * (monthly y trend). No se escribe en public.ventas_taller ni afecta
+ * /api/logistica/ventas-taller. FACTURADO y tipos distintos de ST
+ * conservan costo y margen originales.
+ */
+export function correctOpenStLineMoney(line: {
+  tipo: string | null;
+  estado: string | null;
+  cliente?: string | null;
+  precio_total_soles: number;
+  costo_total_soles: number;
+  margen_total_soles: number;
+}) {
+  const tipo = (line.tipo ?? "").trim();
+  const estado = (line.estado ?? "").trim().toLocaleUpperCase("es-PE");
+  if (tipo !== "ST" || estado !== "ABIERTO") {
+    return {
+      costo: line.costo_total_soles,
+      margen: line.margen_total_soles,
+    };
+  }
+
+  const precio = line.precio_total_soles;
+  if (precio === 0) {
+    return { costo: 0, margen: 0 };
+  }
+
+  const cliente = normalizeClienteNombre(line.cliente);
+  const divisor = (ST_ABIERTO_CLIENTES_DIVISOR_105 as readonly string[]).includes(
+    cliente
+  )
+    ? 1.05
+    : 1.1;
+  const costo = precio / divisor;
+  return { costo, margen: precio - costo };
+}
 
 const TIPOS_OT_SET = new Set<string>(TIPOS_OT_VALIDOS);
 const DATE_FIELD_SET = new Set<string>(DATE_FIELDS);
@@ -353,11 +408,16 @@ function pickDate(values: Array<string | null>) {
   return { value: unique[0] ?? null, unique };
 }
 
-export function groupLinesByOt(lines: VentasTallerDashLine[]): {
+export function groupLinesByOt(
+  lines: Array<VentasTallerDashLine & { cliente?: string | null }>
+): {
   ots: OtAgg[];
   anomalias: OtAnomalia[];
 } {
-  const buckets = new Map<string, VentasTallerDashLine[]>();
+  const buckets = new Map<
+    string,
+    Array<VentasTallerDashLine & { cliente?: string | null }>
+  >();
   for (const line of lines) {
     if (!line.ot) continue;
     const list = buckets.get(line.ot) ?? [];
@@ -373,6 +433,7 @@ export function groupLinesByOt(lines: VentasTallerDashLine[]): {
     const estadoH = pickHeader(group.map((r) => r.estado));
     const marcaH = pickHeader(group.map((r) => r.marca));
     const placaH = pickHeader(group.map((r) => r.placa));
+    const clienteH = pickHeader(group.map((r) => r.cliente ?? null));
     const ingresoH = pickDate(group.map((r) => r.fecha_ingreso));
     const factH = pickDate(group.map((r) => r.fecha_facturacion));
 
@@ -423,14 +484,22 @@ export function groupLinesByOt(lines: VentasTallerDashLine[]): {
     };
 
     for (const line of group) {
+      const corrected = correctOpenStLineMoney({
+        tipo: line.tipo,
+        estado: estadoH.value,
+        cliente: line.cliente ?? clienteH.value,
+        precio_total_soles: line.precio_total_soles,
+        costo_total_soles: line.costo_total_soles,
+        margen_total_soles: line.margen_total_soles,
+      });
       agg.venta += line.precio_total_soles;
-      agg.costo += line.costo_total_soles;
-      agg.margen_db += line.margen_total_soles;
+      agg.costo += corrected.costo;
+      agg.margen_db += corrected.margen;
       if (line.tipo && TIPO_LINEA_SET.has(line.tipo)) {
         const tipo = line.tipo as TipoLinea;
         agg.by_tipo[tipo].venta += line.precio_total_soles;
-        agg.by_tipo[tipo].costo += line.costo_total_soles;
-        agg.by_tipo[tipo].margen_db += line.margen_total_soles;
+        agg.by_tipo[tipo].costo += corrected.costo;
+        agg.by_tipo[tipo].margen_db += corrected.margen;
       }
     }
     agg.margen_calc = agg.venta - agg.costo;
@@ -691,7 +760,7 @@ function roundResponse(
   };
 }
 
-function mapLine(row: Record<string, unknown>): VentasTallerDashLine | null {
+function mapLine(row: Record<string, unknown>): DashboardSourceLine | null {
   const ot = String(row.ot ?? "").trim();
   if (!ot) return null;
   return {
@@ -701,6 +770,7 @@ function mapLine(row: Record<string, unknown>): VentasTallerDashLine | null {
     marca: String(row.marca ?? "").trim() || null,
     placa: String(row.placa ?? "").trim() || null,
     tipo: String(row.tipo ?? "").trim() || null,
+    cliente: String(row.cliente ?? "").trim() || null,
     fecha_ingreso: isYmd(String(row.fecha_ingreso ?? "").slice(0, 10))
       ? String(row.fecha_ingreso).slice(0, 10)
       : null,
@@ -726,7 +796,7 @@ async function fetchFilteredLines(query: VentasTallerDashboardQuery, extra?: {
   const to = extra?.to ?? query.to;
   const requireDate = extra?.requireDate ?? true;
 
-  const lines: VentasTallerDashLine[] = [];
+  const lines: DashboardSourceLine[] = [];
   let consultas = 0;
   let fromIdx = 0;
 
