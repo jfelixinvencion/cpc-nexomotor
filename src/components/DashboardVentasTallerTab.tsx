@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArcElement,
   BarElement,
   CategoryScale,
   Chart as ChartJS,
@@ -13,7 +14,7 @@ import {
   type ActiveElement,
   type ChartEvent,
 } from "chart.js";
-import { Bar, Line } from "react-chartjs-2";
+import { Bar, Doughnut, Line } from "react-chartjs-2";
 import { Eye, Loader2, RotateCcw, X } from "lucide-react";
 import {
   MIN_FECHA,
@@ -35,6 +36,7 @@ import VentaTallerDetalleModal, {
 } from "@/components/VentaTallerDetalleModal";
 
 ChartJS.register(
+  ArcElement,
   BarElement,
   CategoryScale,
   LinearScale,
@@ -107,6 +109,17 @@ function moneyOf(rows: DashboardOtRow[]) {
 
 function statusOf(rows: MoneyByKey[], key: string) {
   return rows.find((row) => row.key === key) ?? null;
+}
+
+function moneyByTipoLinea(rows: MoneyByKey[], tipo: string) {
+  const row = rows.find((item) => item.key === tipo);
+  const venta = row?.venta ?? 0;
+  const costo = row?.costo ?? 0;
+  return {
+    venta,
+    costo,
+    margen: row?.margen ?? venta - costo,
+  };
 }
 
 export default function DashboardVentasTallerTab() {
@@ -461,8 +474,8 @@ function ResumenMensualView() {
             />
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <ChartCard title="Sección A · Venta vs Costo por Tipo OT">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <ChartCard title="Venta vs Costo por Tipo OT">
               <Bar
                 data={{
                   labels: [...TIPOS_OT_VALIDOS],
@@ -511,20 +524,31 @@ function ResumenMensualView() {
               />
             </ChartCard>
 
-            <ChartCard title="Sección B · Estado de OTs">
+            <ChartCard title="Venta y costo por tipo de línea">
               <Bar
                 data={{
-                  labels: ["Facturado", "Abierto"],
+                  labels: [...TIPOS_LINEA],
                   datasets: [
                     {
-                      label: "OTs",
-                      data: [facturado?.ots ?? 0, abierto?.ots ?? 0],
-                      backgroundColor: COLORS.facturado,
+                      label: "Venta",
+                      data: TIPOS_LINEA.map(
+                        (tipo) => moneyByTipoLinea(data.by_tipo, tipo).venta
+                      ),
+                      backgroundColor: COLORS.venta,
                     },
                     {
-                      label: "Venta (S/)",
-                      data: [facturado?.venta ?? 0, abierto?.venta ?? 0],
-                      backgroundColor: COLORS.venta,
+                      label: "Costo",
+                      data: TIPOS_LINEA.map(
+                        (tipo) => moneyByTipoLinea(data.by_tipo, tipo).costo
+                      ),
+                      backgroundColor: COLORS.costo,
+                    },
+                    {
+                      label: "Margen",
+                      data: TIPOS_LINEA.map(
+                        (tipo) => moneyByTipoLinea(data.by_tipo, tipo).margen
+                      ),
+                      backgroundColor: COLORS.margen,
                     },
                   ],
                 }}
@@ -532,8 +556,85 @@ function ResumenMensualView() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: { legend: { position: "bottom" } },
+                }}
+              />
+            </ChartCard>
+
+            <ChartCard title="Estado de OTs">
+              <Doughnut
+                data={{
+                  labels: ["Facturado", "Abierto"],
+                  datasets: [
+                    {
+                      label: "Venta",
+                      data: [facturado?.venta ?? 0, abierto?.venta ?? 0],
+                      backgroundColor: [COLORS.facturado, COLORS.abierto],
+                      borderWidth: 1,
+                    },
+                  ],
+                }}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: {
+                      position: "bottom",
+                      labels: {
+                        generateLabels(chart) {
+                          const dataset = chart.data.datasets[0];
+                          const values = (dataset?.data ?? []) as number[];
+                          const total = values.reduce(
+                            (sum, value) => sum + Number(value || 0),
+                            0
+                          );
+                          const colors = dataset?.backgroundColor;
+                          return (chart.data.labels ?? []).map((label, i) => {
+                            const value = Number(values[i] ?? 0);
+                            const pct = total > 0 ? (value / total) * 100 : 0;
+                            const color = Array.isArray(colors)
+                              ? String(colors[i])
+                              : String(colors ?? COLORS.venta);
+                            return {
+                              text: `${String(label)} (${pct.toLocaleString("es-PE", {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              })}%)`,
+                              fillStyle: color,
+                              strokeStyle: color,
+                              hidden: false,
+                              index: i,
+                            };
+                          });
+                        },
+                      },
+                    },
+                    tooltip: {
+                      callbacks: {
+                        title(items) {
+                          return String(items[0]?.label ?? "");
+                        },
+                        label(ctx) {
+                          const row = ctx.dataIndex === 1 ? abierto : facturado;
+                          const venta = row?.venta ?? 0;
+                          const ots = row?.ots ?? 0;
+                          const total =
+                            (facturado?.venta ?? 0) + (abierto?.venta ?? 0);
+                          const pct = total > 0 ? (venta / total) * 100 : 0;
+                          return [
+                            `Venta: ${formatSoles(venta)}`,
+                            `Cantidad de OTs: ${ots}`,
+                            `Porcentaje: ${pct.toLocaleString("es-PE", {
+                              minimumFractionDigits: 1,
+                              maximumFractionDigits: 1,
+                            })}%`,
+                          ];
+                        },
+                      },
+                    },
+                  },
                   onClick: (_: ChartEvent, elements: ActiveElement[]) => {
                     const idx = elements[0]?.index;
+                    if (idx == null) return;
                     const estado = idx === 1 ? "ABIERTO" : "FACTURADO";
                     setDrawer({
                       kind: "estado",
@@ -549,7 +650,7 @@ function ResumenMensualView() {
           <div className="rounded-xl border border-border bg-white p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-foreground">
-                Sección C · Preventivo por marca
+                Preventivo por marca
               </h3>
               {data.preventivo_by_marca.length > 10 ? (
                 <button
@@ -613,48 +714,16 @@ function ResumenMensualView() {
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <ChartCard title="Sección D · Correctivo y Siniestro en el tiempo">
-              <Line
-                data={buildTimeline(data.correctivo_siniestro_by_date)}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
-                }}
-              />
-            </ChartCard>
-            <ChartCard title="Sección E · Venta y costo por tipo de línea">
-              <Bar
-                data={{
-                  labels: [...TIPOS_LINEA],
-                  datasets: [
-                    {
-                      label: "Venta",
-                      data: TIPOS_LINEA.map(
-                        (tipo) =>
-                          data.by_tipo.find((row) => row.key === tipo)?.venta ?? 0
-                      ),
-                      backgroundColor: COLORS.venta,
-                    },
-                    {
-                      label: "Costo",
-                      data: TIPOS_LINEA.map(
-                        (tipo) =>
-                          data.by_tipo.find((row) => row.key === tipo)?.costo ?? 0
-                      ),
-                      backgroundColor: COLORS.costo,
-                    },
-                  ],
-                }}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom" } },
-                }}
-              />
-            </ChartCard>
-          </div>
+          <ChartCard title="Correctivo y Siniestro en el tiempo">
+            <Line
+              data={buildTimeline(data.correctivo_siniestro_by_date)}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: "bottom" } },
+              }}
+            />
+          </ChartCard>
         </>
       ) : null}
 
