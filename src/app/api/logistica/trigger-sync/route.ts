@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enforceIfRealSession } from "@/lib/auth/require";
 
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   const target = request.nextUrl.searchParams.get("target");
   if (target === "inversa") {

@@ -3,15 +3,17 @@ import { sigmaLogin } from "@/lib/sigma/client";
 import { getStoredToken } from "@/lib/sigma/token";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
+export const maxDuration = 300;
+
 const LIST_URL =
   "https://report-api.sigma-peru.com/api/after-sales/work-orders";
 const DETAIL_URL_BASE =
   "https://dms-api.sigma-peru.com/api/after-sale/work-order-spare/work-order";
 
-const LOOKBACK_DAYS = 30;
+const LOOKBACK_DAYS = 60;
 const LOOKAHEAD_DAYS = 1;
 const ENTRY_TZ = "America/Lima";
-const PER_PAGE = 100;
+const PER_PAGE = 200;
 const LIST_PAGE = 1;
 const DETAIL_CONCURRENCY = 4;
 const INSERT_BATCH = 100;
