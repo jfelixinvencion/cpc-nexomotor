@@ -15,8 +15,11 @@ const LOOKAHEAD_DAYS = 1;
 const ENTRY_TZ = "America/Lima";
 const PER_PAGE = 200;
 const LIST_PAGE = 1;
-const DETAIL_CONCURRENCY = 4;
+const DETAIL_CONCURRENCY = 2;
 const INSERT_BATCH = 100;
+const DETAIL_WAVE_PAUSE_MS = 350;
+const DETAIL_RETRY_DELAYS_MS = [4000, 7000] as const;
+const FACTURADO_STATUS = "FACTURADO";
 
 /** Prefer real delivery/dispatch fields; never created_at / updated_at. */
 const SPARE_DELIVERY_DATE_FIELDS = [
@@ -33,6 +36,7 @@ type SigmaWorkOrderListItem = {
   work_order_number?: string | number | null;
   number?: string | number | null;
   operation_type?: string | null;
+  general_status?: string | null;
   created_at?: string | null;
   [key: string]: unknown;
 };
@@ -122,6 +126,21 @@ function requireTenantId(): string {
     throw new Error("SIGMA_TENANT_ID no está definido");
   }
   return tenantId;
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isFacturadoStatus(value: string | null | undefined) {
+  return (value ?? "").trim() === FACTURADO_STATUS;
+}
+
+function isTooManyAttempts(status: number, body: string) {
+  if (status === 429) return true;
+  return status === 500 && /too many attempts/i.test(body);
 }
 
 function formatYmdInTimeZone(date: Date, timeZone: string): string {
@@ -584,10 +603,9 @@ async function fetchWorkOrderListPage(
   };
 }
 
-async function fetchSpareDetail(
+async function fetchSpareDetailOnce(
   tokenRef: { token: string },
-  id: number,
-  retried = false
+  id: number
 ): Promise<SpareDetailPayload | null> {
   const res = await fetch(`${DETAIL_URL_BASE}/${id}`, {
     method: "GET",
@@ -600,20 +618,77 @@ async function fetchSpareDetail(
   });
 
   if (res.status === 401 || res.status === 403) {
-    if (retried) {
-      throw new Error(`detail ${id} failed: ${res.status} after relogin`);
-    }
-    tokenRef.token = await sigmaLogin();
-    return fetchSpareDetail(tokenRef, id, true);
+    const authError = new Error(`detail ${id} failed: ${res.status}`);
+    (authError as Error & { status?: number }).status = res.status;
+    throw authError;
   }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`detail ${id} failed: ${res.status} ${body}`);
+    const err = new Error(`detail ${id} failed: ${res.status} ${body}`.trim());
+    (err as Error & { status?: number; body?: string }).status = res.status;
+    (err as Error & { status?: number; body?: string }).body = body;
+    throw err;
   }
 
   const json = await res.json().catch(() => null);
   return extractDetailData(json);
+}
+
+async function fetchSpareDetail(
+  tokenRef: { token: string },
+  id: number
+): Promise<SpareDetailPayload | null> {
+  let authRetried = false;
+  let lastTooMany: Error | null = null;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt === 2) await sleep(DETAIL_RETRY_DELAYS_MS[0]);
+    if (attempt === 3) await sleep(DETAIL_RETRY_DELAYS_MS[1]);
+
+    try {
+      return await fetchSpareDetailOnce(tokenRef, id);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status;
+      const body = (err as Error & { body?: string }).body ?? "";
+
+      if ((status === 401 || status === 403) && !authRetried) {
+        tokenRef.token = await sigmaLogin();
+        authRetried = true;
+        try {
+          return await fetchSpareDetailOnce(tokenRef, id);
+        } catch (retryErr) {
+          const retryStatus = (retryErr as Error & { status?: number }).status;
+          const retryBody = (retryErr as Error & { body?: string }).body ?? "";
+          if (retryStatus === 401 || retryStatus === 403) {
+            throw new Error(
+              `detail ${id} failed: ${retryStatus} after relogin`
+            );
+          }
+          if (
+            retryStatus != null &&
+            isTooManyAttempts(retryStatus, retryBody)
+          ) {
+            lastTooMany =
+              retryErr instanceof Error
+                ? retryErr
+                : new Error(errorMessage(retryErr));
+            continue;
+          }
+          throw retryErr;
+        }
+      }
+
+      if (status != null && isTooManyAttempts(status, body)) {
+        lastTooMany = err instanceof Error ? err : new Error(errorMessage(err));
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  throw lastTooMany ?? new Error(`detail ${id} failed: Too Many Attempts`);
 }
 
 function resolveOtNumero(
@@ -820,6 +895,52 @@ async function upsertFillNullHeaders(
   return attempted;
 }
 
+function isListedAsFacturado(statuses: Set<string> | undefined) {
+  if (!statuses || statuses.size === 0) return false;
+  return [...statuses].every((status) => isFacturadoStatus(status));
+}
+
+async function loadCompletedFacturadaOtIds(
+  otIds: number[]
+): Promise<Set<number>> {
+  const completed = new Set<number>();
+  const chunkSize = 200;
+  for (let i = 0; i < otIds.length; i += chunkSize) {
+    const chunk = otIds.slice(i, i + chunkSize);
+    const { data, error } = await supabaseAdmin
+      .from("logistica_inversa_ot_sync")
+      .select("ot_id")
+      .in("ot_id", chunk);
+    if (error) {
+      throw new Error(`logistica_inversa_ot_sync select: ${error.message}`);
+    }
+    for (const row of data ?? []) {
+      const id = Number((row as { ot_id?: unknown }).ot_id);
+      if (Number.isFinite(id)) completed.add(id);
+    }
+  }
+  return completed;
+}
+
+async function recordFacturadaConstancia(params: {
+  ot_id: number;
+  ot_numero: string | null;
+  lineas_persistidas: number;
+}): Promise<void> {
+  const { error } = await supabaseAdmin.from("logistica_inversa_ot_sync").upsert(
+    {
+      ot_id: params.ot_id,
+      ot_numero: params.ot_numero,
+      completed_while_facturada_at: new Date().toISOString(),
+      lineas_persistidas: params.lineas_persistidas,
+    },
+    { onConflict: "ot_id", ignoreDuplicates: true }
+  );
+  if (error) {
+    throw new Error(`logistica_inversa_ot_sync insert: ${error.message}`);
+  }
+}
+
 function emptyDiagnostics(
   range: { start: string; end: string },
   partial?: Partial<ListDiagnostics>
@@ -943,6 +1064,7 @@ export async function POST(request: NextRequest) {
     );
 
     const otNumeroById = new Map<number, string>();
+    const generalStatusesById = new Map<number, Set<string>>();
     const ids: number[] = [];
     for (const wo of list) {
       const id = parseOtId(wo.id);
@@ -951,6 +1073,12 @@ export async function POST(request: NextRequest) {
       const otNum =
         asNonEmptyString(wo.work_order_number) ?? asNonEmptyString(wo.number);
       if (otNum) otNumeroById.set(id, otNum);
+      const rawStatus =
+        typeof wo.general_status === "string" ? wo.general_status.trim() : "";
+      if (!generalStatusesById.has(id)) {
+        generalStatusesById.set(id, new Set());
+      }
+      if (rawStatus) generalStatusesById.get(id)!.add(rawStatus);
     }
     const uniqueIds = Array.from(new Set(ids));
     console.log(
@@ -1002,16 +1130,28 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const completedFacturadaIds = await loadCompletedFacturadaOtIds(uniqueIds);
+    const idsToFetch = uniqueIds.filter(
+      (id) =>
+        !(
+          isListedAsFacturado(generalStatusesById.get(id)) &&
+          completedFacturadaIds.has(id)
+        )
+    );
+    const skippedFacturadaWithConstancia =
+      uniqueIds.length - idsToFetch.length;
+
     const tokenRef = { token };
-    const collected: LogisticaInversaRow[] = [];
+    let insertedAttempted = 0;
     let detailsFetched = 0;
     let sparesWithDelivery = 0;
     let skippedNoSpares = 0;
     let skippedNoOtNumero = 0;
     const dateFieldsUsed = new Set<string>();
 
-    for (let i = 0; i < uniqueIds.length; i += DETAIL_CONCURRENCY) {
-      const chunk = uniqueIds.slice(i, i + DETAIL_CONCURRENCY);
+    for (let i = 0; i < idsToFetch.length; i += DETAIL_CONCURRENCY) {
+      if (i > 0) await sleep(DETAIL_WAVE_PAUSE_MS);
+      const chunk = idsToFetch.slice(i, i + DETAIL_CONCURRENCY);
       const results = await Promise.all(
         chunk.map((id) =>
           fetchSpareDetail(tokenRef, id).then(
@@ -1029,11 +1169,13 @@ export async function POST(request: NextRequest) {
         if (!r.detail) {
           const errMsg =
             "error" in r && r.error ? r.error : "fetch failed / sin detalle";
-          // Missing detail or missing spares should not abort the whole sync.
           if (!("error" in r) || !r.error) {
             skippedNoSpares += 1;
             diagnostics.ots_empty_spares.push(r.id);
-            console.warn(`[sync-inversa] OT id=${r.id} sin detalle / spares vacío`);
+            console.warn(
+              `[sync-inversa] OT id=${r.id} sin detalle / spares vacío`
+            );
+            errors.push({ id: r.id, error: errMsg });
             continue;
           }
           console.error(`[sync-inversa] detail ${r.id}:`, errMsg);
@@ -1041,10 +1183,28 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        detailsFetched += 1;
+        const fallbackOtNumero = otNumeroById.get(r.id) ?? null;
+        const resolvedOtNumero = resolveOtNumero(r.detail, fallbackOtNumero);
+        const facturada = isListedAsFacturado(generalStatusesById.get(r.id));
+
         if (!Array.isArray(r.detail.spares) || r.detail.spares.length === 0) {
           skippedNoSpares += 1;
           diagnostics.ots_empty_spares.push(r.id);
           console.warn(`[sync-inversa] OT id=${r.id} spares vacío`);
+          if (facturada) {
+            try {
+              await recordFacturadaConstancia({
+                ot_id: r.id,
+                ot_numero: resolvedOtNumero,
+                lineas_persistidas: 0,
+              });
+            } catch (constanciaErr) {
+              const message = errorMessage(constanciaErr);
+              console.error(`[sync-inversa] constancia ${r.id}:`, message);
+              errors.push({ id: r.id, error: message });
+            }
+          }
           continue;
         }
 
@@ -1073,58 +1233,50 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        detailsFetched += 1;
-        const rows = rowsFromDetail(
-          r.detail,
-          otNumeroById.get(r.id) ?? null
-        );
-        if (
-          rows.length === 0 &&
-          Array.isArray(r.detail.spares) &&
-          r.detail.spares.length > 0 &&
-          !resolveOtNumero(r.detail, otNumeroById.get(r.id) ?? null)
-        ) {
+        const rows = rowsFromDetail(r.detail, fallbackOtNumero);
+        if (rows.length === 0 && !resolvedOtNumero) {
           skippedNoOtNumero += 1;
+          console.warn(
+            `[sync-inversa] OT id=${r.id} detalle OK pero sin ot_numero`
+          );
+          errors.push({
+            id: r.id,
+            error: "detalle OK pero ot_numero vacío; no se persistió",
+          });
+          continue;
         }
-        sparesWithDelivery += rows.length;
-        collected.push(...rows);
+
+        try {
+          const persisted = await upsertFillNullHeaders(rows);
+          insertedAttempted += persisted;
+          sparesWithDelivery += rows.length;
+          if (facturada) {
+            await recordFacturadaConstancia({
+              ot_id: r.id,
+              ot_numero: resolvedOtNumero,
+              lineas_persistidas: persisted,
+            });
+          }
+        } catch (persistErr) {
+          const message = errorMessage(persistErr);
+          console.error(`[sync-inversa] persist ${r.id}:`, message);
+          errors.push({ id: r.id, error: message });
+        }
       }
     }
 
     diagnostics.spare_date_fields_used = Array.from(dateFieldsUsed);
     console.log(
-      `[sync-inversa] spares with delivery=${diagnostics.spares_with_delivery_date} without=${diagnostics.spares_without_delivery_date} empty_ot_ids=${diagnostics.ots_empty_spares.join(",") || "(none)"} fields=${diagnostics.spare_date_fields_used.join(",") || "(none)"}`
+      `[sync-inversa] spares with delivery=${diagnostics.spares_with_delivery_date} without=${diagnostics.spares_without_delivery_date} empty_ot_ids=${diagnostics.ots_empty_spares.join(",") || "(none)"} fields=${diagnostics.spare_date_fields_used.join(",") || "(none)"} skipped_facturada_constancia=${skippedFacturadaWithConstancia}`
     );
-
-    let insertedAttempted = 0;
-    try {
-      insertedAttempted = await upsertFillNullHeaders(collected);
-    } catch (insertErr) {
-      const message = errorMessage(insertErr);
-      console.error("[sync-inversa] insert failed:", message);
-      return NextResponse.json(
-        {
-          success: false,
-          entry_date_range,
-          total_listed: uniqueIds.length,
-          total_details_fetched: detailsFetched,
-          spares_with_delivery: sparesWithDelivery,
-          inserted_attempted: 0,
-          skipped_no_spares: skippedNoSpares,
-          skipped_no_ot_numero: skippedNoOtNumero,
-          diagnostics,
-          errors: [...errors, { id: -1, error: message }],
-          error: message,
-        },
-        { status: 500 }
-      );
-    }
 
     return NextResponse.json({
       success: errors.length === 0,
       entry_date_range,
       total_listed: uniqueIds.length,
       total_details_fetched: detailsFetched,
+      details_requested: idsToFetch.length,
+      skipped_facturada_with_constancia: skippedFacturadaWithConstancia,
       spares_with_delivery: sparesWithDelivery,
       inserted_attempted: insertedAttempted,
       skipped_no_spares: skippedNoSpares,
