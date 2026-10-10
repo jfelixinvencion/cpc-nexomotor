@@ -33,7 +33,9 @@ import LogisticaVentasTallerTab from "@/components/LogisticaVentasTallerTab";
 import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 const INVERSA_PAGE_SIZE = 200;
+const INVERSA_EXPORT_PAGE_SIZE = 500;
 const INVERSA_ROW_HEIGHT = 48;
+const LINEA_FECHA_YMD_RE = /^(\d{4})-(\d{2})-(\d{2})/;
 const ICON_BTN =
   "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border p-1 transition disabled:cursor-not-allowed disabled:opacity-60";
 const MODAL_INPUT_CLASS =
@@ -184,7 +186,7 @@ function formatPrecioPen(value: number | string | null | undefined) {
 function formatFechaEntrega(value: string | null | undefined) {
   if (value == null || value.trim() === "") return "-";
   const raw = value.trim();
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const m = raw.match(LINEA_FECHA_YMD_RE);
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return "-";
@@ -192,6 +194,85 @@ function formatFechaEntrega(value: string | null | undefined) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
+}
+
+function ymdFromLineaFechaEntrega(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const m = value.trim().match(LINEA_FECHA_YMD_RE);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+function isYmd(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function isInversaFechaRangeInvalid(desde: string, hasta: string) {
+  return Boolean(
+    desde && hasta && isYmd(desde) && isYmd(hasta) && desde > hasta
+  );
+}
+
+type HistorialInversaFilters = {
+  texto: string;
+  estados: GestionEstadoFiltro[];
+  estadoRepuesto: string[];
+  desde: string;
+  hasta: string;
+};
+
+function filterHistorialInversa(
+  items: LogisticaInversaRow[],
+  { texto, estados, estadoRepuesto, desde, hasta }: HistorialInversaFilters
+): LogisticaInversaRow[] {
+  const textQuery = normalize(texto);
+  const estadoRepuestoNorm = new Set(estadoRepuesto.map((v) => normalize(v)));
+  const applyFecha =
+    (Boolean(desde) || Boolean(hasta)) &&
+    !isInversaFechaRangeInvalid(desde, hasta);
+
+  return items.filter((item) => {
+    const estaCertificado = Boolean(item.certificado_at?.trim());
+    const estaVendido = Boolean(item.vendido_chatarrero_at?.trim());
+    const tieneFechaEntViejo =
+      formatFechaEntrega(item.fecha_registro_retorno) !== "-";
+
+    if (textQuery) {
+      const haystack = normalize(
+        [
+          item.ot_numero != null ? String(item.ot_numero) : "",
+          item.placa ?? "",
+          item.cliente_nombre ?? "",
+          item.linea_codigo ?? "",
+          item.linea_descripcion ?? "",
+        ].join(" ")
+      );
+      if (!haystack.includes(textQuery)) return false;
+    }
+
+    if (estados.length > 0) {
+      const matchesGestion = estados.some((key) => {
+        if (key === "vendido") return estaVendido;
+        if (key === "certificado") return estaCertificado && !estaVendido;
+        if (key === "pendiente") return !estaCertificado && tieneFechaEntViejo;
+        return !tieneFechaEntViejo;
+      });
+      if (!matchesGestion) return false;
+    }
+
+    if (estadoRepuestoNorm.size > 0) {
+      const rowEstado = normalize(item.estado_repuesto ?? "");
+      if (!rowEstado || !estadoRepuestoNorm.has(rowEstado)) return false;
+    }
+
+    if (applyFecha) {
+      const ymd = ymdFromLineaFechaEntrega(item.linea_fecha_entrega);
+      if (!ymd) return false;
+      if (desde && ymd < desde) return false;
+      if (hasta && ymd > hasta) return false;
+    }
+
+    return true;
+  });
 }
 
 function excelFecha(value: string | null | undefined) {
@@ -491,6 +572,12 @@ export default function LogisticaDashboard() {
   const [inversaHasMore, setInversaHasMore] = useState(true);
   const [inversaError, setInversaError] = useState<string | null>(null);
   const [inversaFilterTexto, setInversaFilterTexto] = useState("");
+  const [inversaFechaDesde, setInversaFechaDesde] = useState("");
+  const [inversaFechaHasta, setInversaFechaHasta] = useState("");
+  const [inversaExporting, setInversaExporting] = useState(false);
+  const [inversaExportMessage, setInversaExportMessage] = useState<string | null>(
+    null
+  );
   const [inversaSubTab, setInversaSubTab] = useState<InversaSubTab>("historial");
   const [gestionEstadoFiltros, setGestionEstadoFiltros] = useState<
     GestionEstadoFiltro[]
@@ -706,6 +793,7 @@ export default function LogisticaDashboard() {
       !inversaHasMore ||
       inversaLoading ||
       inversaLoadingMore ||
+      inversaExporting ||
       inversaFetchingMoreRef.current
     ) {
       return;
@@ -729,6 +817,7 @@ export default function LogisticaDashboard() {
     inversaHasMore,
     inversaLoading,
     inversaLoadingMore,
+    inversaExporting,
   ]);
 
   useEffect(() => {
@@ -882,34 +971,108 @@ export default function LogisticaDashboard() {
     }
   }
 
-  function handleExportInversaExcel() {
-    const rows = filteredInversa.map((item) => ({
-      "Fecha Ent. Rep. Nuevo": excelFecha(item.linea_fecha_entrega),
-      Cliente: asText(item.cliente_nombre),
-      OT: asText(item.ot_numero),
-      Placa: asText(item.placa),
-      Código: asText(item.linea_codigo),
-      Descripción: asText(item.linea_descripcion),
-      "Cant.":
-        item.linea_cantidad == null || item.linea_cantidad === ""
-          ? ""
-          : formatCantidad(item.linea_cantidad),
-      "Fecha Ent. Rep. Viejo": excelFecha(item.fecha_registro_retorno),
-      "Resp. Entrega": asText(item.responsable_entrega),
-      "Estado Repuesto": asText(item.estado_repuesto),
-      Observaciones: asText(item.observaciones),
-      Certificado: item.certificado_at ? "SÍ" : "NO",
-      "Vendido Chatarrero": item.vendido_chatarrero_at ? "SÍ" : "NO",
-      "FECHA VENTA CHATARRERO": excelFechaHora(item.vendido_chatarrero_at),
-    }));
+  async function handleExportInversaExcel() {
+    if (inversaExporting) return;
+    if (isInversaFechaRangeInvalid(inversaFechaDesde, inversaFechaHasta)) {
+      setInversaExportMessage("Desde no puede ser mayor que Hasta.");
+      return;
+    }
 
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Logística Inversa");
-    XLSX.writeFile(
-      workbook,
-      `Reporte_Logistica_Inversa_${todayYmdLocal()}.xlsx`
-    );
+    setInversaExporting(true);
+    setInversaExportMessage(null);
+    inversaFetchingMoreRef.current = true;
+
+    try {
+      let allItems = inversaItems;
+
+      if (inversaHasMore) {
+        const extras: LogisticaInversaRow[] = [];
+        let from = inversaLoadedCountRef.current;
+
+        for (;;) {
+          const to = from + INVERSA_EXPORT_PAGE_SIZE - 1;
+          const { data, error } = await supabase
+            .from("logistica_inversa")
+            .select("*")
+            .order("linea_fecha_entrega", { ascending: false })
+            .range(from, to);
+
+          if (error) {
+            throw new Error(error.message);
+          }
+
+          const rawRows = (data as Record<string, unknown>[] | null) ?? [];
+          extras.push(...rawRows.map(mapInversaRow));
+          if (rawRows.length < INVERSA_EXPORT_PAGE_SIZE) break;
+          from += INVERSA_EXPORT_PAGE_SIZE;
+        }
+
+        const seen = new Set(allItems.map((row) => row.id));
+        const merged = [...allItems];
+        for (const row of extras) {
+          if (!seen.has(row.id)) {
+            seen.add(row.id);
+            merged.push(row);
+          }
+        }
+
+        allItems = merged;
+        setInversaItems(merged);
+        inversaLoadedCountRef.current = merged.length;
+        setInversaHasMore(false);
+      }
+
+      const filtered = filterHistorialInversa(allItems, {
+        texto: inversaFilterTexto,
+        estados: gestionEstadoFiltros,
+        estadoRepuesto: estadoRepuestoFiltros,
+        desde: inversaFechaDesde,
+        hasta: inversaFechaHasta,
+      });
+
+      if (filtered.length === 0) {
+        setInversaExportMessage(
+          "No hay resultados para los filtros actuales. No se generó el Excel."
+        );
+        return;
+      }
+
+      const rows = filtered.map((item) => ({
+        "Fecha Ent. Rep. Nuevo": excelFecha(item.linea_fecha_entrega),
+        Cliente: asText(item.cliente_nombre),
+        OT: asText(item.ot_numero),
+        Placa: asText(item.placa),
+        Código: asText(item.linea_codigo),
+        Descripción: asText(item.linea_descripcion),
+        "Cant.":
+          item.linea_cantidad == null || item.linea_cantidad === ""
+            ? ""
+            : formatCantidad(item.linea_cantidad),
+        "Fecha Ent. Rep. Viejo": excelFecha(item.fecha_registro_retorno),
+        "Resp. Entrega": asText(item.responsable_entrega),
+        "Estado Repuesto": asText(item.estado_repuesto),
+        Observaciones: asText(item.observaciones),
+        Certificado: item.certificado_at ? "SÍ" : "NO",
+        "Vendido Chatarrero": item.vendido_chatarrero_at ? "SÍ" : "NO",
+        "FECHA VENTA CHATARRERO": excelFechaHora(item.vendido_chatarrero_at),
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Logística Inversa");
+      XLSX.writeFile(
+        workbook,
+        `Reporte_Logistica_Inversa_${todayYmdLocal()}.xlsx`
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Error al exportar";
+      console.error("[logistica-inversa] export error:", err);
+      setInversaExportMessage(`Error al exportar Excel: ${message}`);
+    } finally {
+      inversaFetchingMoreRef.current = false;
+      setInversaExporting(false);
+    }
   }
 
   function startEditInversa(item: LogisticaInversaRow) {
@@ -1353,54 +1516,29 @@ export default function LogisticaDashboard() {
     [inversaItems]
   );
 
-  const filteredInversa = useMemo(() => {
-    const textQuery = normalize(inversaFilterTexto);
-    const estadoRepuestoNorm = new Set(
-      estadoRepuestoFiltros.map((v) => normalize(v))
-    );
+  const inversaFechaRangeInvalid = isInversaFechaRangeInvalid(
+    inversaFechaDesde,
+    inversaFechaHasta
+  );
 
-    return inversaItems.filter((item) => {
-      const estaCertificado = Boolean(item.certificado_at?.trim());
-      const estaVendido = Boolean(item.vendido_chatarrero_at?.trim());
-      const tieneFechaEntViejo =
-        formatFechaEntrega(item.fecha_registro_retorno) !== "-";
-
-      if (textQuery) {
-        const haystack = normalize(
-          [
-            item.ot_numero != null ? String(item.ot_numero) : "",
-            item.placa ?? "",
-            item.cliente_nombre ?? "",
-            item.linea_codigo ?? "",
-            item.linea_descripcion ?? "",
-          ].join(" ")
-        );
-        if (!haystack.includes(textQuery)) return false;
-      }
-
-      if (gestionEstadoFiltros.length > 0) {
-        const matchesGestion = gestionEstadoFiltros.some((key) => {
-          if (key === "vendido") return estaVendido;
-          if (key === "certificado") return estaCertificado && !estaVendido;
-          if (key === "pendiente") return !estaCertificado && tieneFechaEntViejo;
-          return !tieneFechaEntViejo;
-        });
-        if (!matchesGestion) return false;
-      }
-
-      if (estadoRepuestoNorm.size > 0) {
-        const rowEstado = normalize(item.estado_repuesto ?? "");
-        if (!rowEstado || !estadoRepuestoNorm.has(rowEstado)) return false;
-      }
-
-      return true;
-    });
-  }, [
-    inversaItems,
-    inversaFilterTexto,
-    gestionEstadoFiltros,
-    estadoRepuestoFiltros,
-  ]);
+  const filteredInversa = useMemo(
+    () =>
+      filterHistorialInversa(inversaItems, {
+        texto: inversaFilterTexto,
+        estados: gestionEstadoFiltros,
+        estadoRepuesto: estadoRepuestoFiltros,
+        desde: inversaFechaDesde,
+        hasta: inversaFechaHasta,
+      }),
+    [
+      inversaItems,
+      inversaFilterTexto,
+      gestionEstadoFiltros,
+      estadoRepuestoFiltros,
+      inversaFechaDesde,
+      inversaFechaHasta,
+    ]
+  );
 
   const filteredPendientes = useMemo(() => {
     const textQuery = normalize(pendientesFilterTexto);
@@ -1450,7 +1588,8 @@ export default function LogisticaDashboard() {
       tab !== "inversa" ||
       inversaSubTab !== "historial" ||
       !inversaHasMore ||
-      inversaLoading
+      inversaLoading ||
+      inversaExporting
     )
       return;
     if (filteredInversa.length === 0 && inversaItems.length > 0) {
@@ -1470,6 +1609,7 @@ export default function LogisticaDashboard() {
     inversaItems.length,
     inversaHasMore,
     inversaLoading,
+    inversaExporting,
     loadMoreInversa,
   ]);
 
@@ -1777,39 +1917,97 @@ export default function LogisticaDashboard() {
 
       {tab === "inversa" ? (
         <div role="tabpanel" className="space-y-4">
-          <div
-            role="tablist"
-            aria-label="Secciones de logística inversa"
-            className="mb-4 flex w-fit items-center gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-1"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={inversaSubTab === "historial"}
-              onClick={() => setInversaSubTab("historial")}
-              className={
-                inversaSubTab === "historial"
-                  ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
-                  : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
-              }
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <div
+              role="tablist"
+              aria-label="Secciones de logística inversa"
+              className="flex w-fit items-center gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-1"
             >
-              <span aria-hidden>📋</span>
-              Historial
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={inversaSubTab === "pendientes"}
-              onClick={() => setInversaSubTab("pendientes")}
-              className={
-                inversaSubTab === "pendientes"
-                  ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
-                  : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
-              }
-            >
-              <span aria-hidden>⏳</span>
-              Pendientes
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inversaSubTab === "historial"}
+                onClick={() => setInversaSubTab("historial")}
+                className={
+                  inversaSubTab === "historial"
+                    ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
+                    : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+                }
+              >
+                <span aria-hidden>📋</span>
+                Historial
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inversaSubTab === "pendientes"}
+                onClick={() => setInversaSubTab("pendientes")}
+                className={
+                  inversaSubTab === "pendientes"
+                    ? "flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-blue-600 shadow-sm"
+                    : "flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+                }
+              >
+                <span aria-hidden>⏳</span>
+                Pendientes
+              </button>
+            </div>
+
+            {inversaSubTab === "historial" ? (
+              <div className="relative ml-auto min-w-0">
+                <div className="flex flex-wrap items-end justify-end gap-1.5">
+                  <label className="block min-w-0 sm:w-[150px]">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Desde
+                    </span>
+                    <input
+                      type="date"
+                      value={inversaFechaDesde}
+                      onChange={(e) => setInversaFechaDesde(e.target.value)}
+                      className={`w-full min-w-0 rounded-xl border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:ring-2 ${
+                        inversaFechaRangeInvalid
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-border focus:border-accent focus:ring-accent/20"
+                      }`}
+                    />
+                  </label>
+                  <label className="block min-w-0 sm:w-[150px]">
+                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Hasta
+                    </span>
+                    <input
+                      type="date"
+                      value={inversaFechaHasta}
+                      onChange={(e) => setInversaFechaHasta(e.target.value)}
+                      className={`w-full min-w-0 rounded-xl border bg-white px-3 py-2.5 text-sm text-foreground outline-none transition focus:ring-2 ${
+                        inversaFechaRangeInvalid
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-500/20"
+                          : "border-border focus:border-accent focus:ring-accent/20"
+                      }`}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInversaFechaDesde("");
+                      setInversaFechaHasta("");
+                    }}
+                    disabled={!inversaFechaDesde && !inversaFechaHasta}
+                    className="mb-0.5 inline-flex shrink-0 items-center justify-center rounded-lg border border-border bg-white px-2.5 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Limpiar fechas"
+                    title="Limpiar fechas"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden />
+                    <span className="sr-only">Limpiar fechas</span>
+                  </button>
+                </div>
+                {inversaFechaRangeInvalid ? (
+                  <p className="absolute right-0 top-full z-10 mt-0.5 text-[11px] text-red-600">
+                    Desde no puede ser mayor que Hasta.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {inversaSubTab === "historial" ? (
@@ -1863,15 +2061,31 @@ export default function LogisticaDashboard() {
               {canExportInversa ? (
               <button
                 type="button"
-                onClick={handleExportInversaExcel}
-                disabled={filteredInversa.length === 0}
+                onClick={() => void handleExportInversaExcel()}
+                disabled={
+                  inversaExporting ||
+                  inversaFechaRangeInvalid ||
+                  (filteredInversa.length === 0 && !inversaHasMore)
+                }
                 className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <FileSpreadsheet
-                  className="h-3.5 w-3.5 text-emerald-600"
-                  aria-hidden
-                />
-                Exportar Excel
+                {inversaExporting ? (
+                  <>
+                    <Loader2
+                      className="h-3.5 w-3.5 animate-spin text-emerald-600"
+                      aria-hidden
+                    />
+                    Exportando...
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet
+                      className="h-3.5 w-3.5 text-emerald-600"
+                      aria-hidden
+                    />
+                    Exportar Excel
+                  </>
+                )}
               </button>
               ) : null}
               {canSyncInversa ? (
@@ -1933,6 +2147,12 @@ export default function LogisticaDashboard() {
             ) : null}
           </div>
           )}
+
+          {inversaSubTab === "historial" && inversaExportMessage ? (
+            <p role="status" className="text-right text-[11px] text-red-600">
+              {inversaExportMessage}
+            </p>
+          ) : null}
 
           {inversaSubTab === "historial" && inversaSyncMessage ? (
             <p
