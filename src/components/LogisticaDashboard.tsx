@@ -34,6 +34,7 @@ import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
 
 const INVERSA_PAGE_SIZE = 200;
 const INVERSA_EXPORT_PAGE_SIZE = 500;
+const INVERSA_DELETE_MAX = 200;
 const INVERSA_ROW_HEIGHT = 48;
 const LINEA_FECHA_YMD_RE = /^(\d{4})-(\d{2})-(\d{2})/;
 const ICON_BTN =
@@ -533,7 +534,7 @@ function pendienteFormPayload(form: PendienteForm) {
 
 export default function LogisticaDashboard() {
   const [tab, setTab] = useState<LogisticaTab>("control-ot");
-  const { puede } = usePermisos();
+  const { puede, source: authSource } = usePermisos();
   const canVerInversa = puede("logistica", "inversa", "ver");
   const canVerCompras = puede("logistica", "compras", "ver");
   const canVerDocumentario = puede("logistica", "control_documentario", "ver");
@@ -542,6 +543,8 @@ export default function LogisticaDashboard() {
   const canSyncInversa = puede("logistica", "inversa", "sincronizar");
   const canEditarInversa = puede("logistica", "inversa", "editar");
   const canCertify = puede("logistica", "inversa", "certificar");
+  const canEliminarInversa =
+    authSource === "real" && puede("logistica", "inversa", "eliminar");
 
   useEffect(() => {
     if (tab === "inversa" && !canVerInversa) setTab("control-ot");
@@ -578,6 +581,16 @@ export default function LogisticaDashboard() {
   const [inversaExportMessage, setInversaExportMessage] = useState<string | null>(
     null
   );
+  const [inversaSelectedIds, setInversaSelectedIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [inversaDeleteOpen, setInversaDeleteOpen] = useState(false);
+  const [inversaDeleting, setInversaDeleting] = useState(false);
+  const [inversaDeleteMessage, setInversaDeleteMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const inversaSelectAllRef = useRef<HTMLInputElement | null>(null);
   const [inversaSubTab, setInversaSubTab] = useState<InversaSubTab>("historial");
   const [gestionEstadoFiltros, setGestionEstadoFiltros] = useState<
     GestionEstadoFiltro[]
@@ -737,6 +750,8 @@ export default function LogisticaDashboard() {
     setInversaError(null);
     setInversaHasMore(true);
     inversaLoadedCountRef.current = 0;
+    setInversaSelectedIds(new Set());
+    setInversaDeleteOpen(false);
 
     try {
       await fetchInversaPage(0, false);
@@ -1072,6 +1087,113 @@ export default function LogisticaDashboard() {
     } finally {
       inversaFetchingMoreRef.current = false;
       setInversaExporting(false);
+    }
+  }
+
+  function toggleInversaSelected(id: string, checked: boolean) {
+    setInversaSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllLoadedFiltered(checked: boolean) {
+    if (!checked) {
+      setInversaSelectedIds(new Set());
+      return;
+    }
+    setInversaSelectedIds(
+      new Set(filteredInversa.map((row) => row.id).filter(Boolean))
+    );
+  }
+
+  function closeInversaDeleteModal() {
+    if (inversaDeleting) return;
+    setInversaDeleteOpen(false);
+  }
+
+  async function handleConfirmDeleteInversa() {
+    if (!canEliminarInversa || inversaDeleting) return;
+    const ids = Array.from(inversaSelectedIds);
+    if (ids.length === 0) return;
+    if (ids.length > INVERSA_DELETE_MAX) return;
+
+    setInversaDeleting(true);
+    setInversaDeleteMessage(null);
+
+    try {
+      const res = await fetch("/api/logistica/inversa/historial", {
+        method: "DELETE",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        deletedIds?: unknown;
+        notDeletedIds?: unknown;
+        deletedCount?: number;
+        requestedCount?: number;
+      };
+
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          json.error || "No autorizado para eliminar registros de Historial."
+        );
+      }
+      if (!res.ok && res.status !== 207) {
+        throw new Error(json.error || `Error HTTP ${res.status}`);
+      }
+
+      const deletedIds = Array.isArray(json.deletedIds)
+        ? json.deletedIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const notDeletedIds = Array.isArray(json.notDeletedIds)
+        ? json.notDeletedIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const deletedSet = new Set(deletedIds);
+
+      if (deletedSet.size > 0) {
+        setInversaItems((prev) => prev.filter((row) => !deletedSet.has(row.id)));
+        setInversaSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of deletedSet) next.delete(id);
+          return next;
+        });
+      }
+
+      if (json.success === true && notDeletedIds.length === 0) {
+        setInversaDeleteOpen(false);
+        setInversaDeleteMessage({
+          type: "success",
+          text: `Se eliminaron ${deletedIds.length} registro${deletedIds.length === 1 ? "" : "s"}.`,
+        });
+        return;
+      }
+
+      const pending = notDeletedIds.length > 0 ? notDeletedIds.length : ids.length - deletedIds.length;
+      setInversaDeleteMessage({
+        type: "error",
+        text:
+          deletedIds.length === 0
+            ? json.error ||
+              "No se eliminó ningún registro. Revise el permiso o que los ids existan."
+            : `Eliminación parcial: se borraron ${deletedIds.length} de ${ids.length}. Quedaron ${pending} sin eliminar.`,
+      });
+      setInversaDeleteOpen(false);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Error al eliminar";
+      setInversaDeleteMessage({ type: "error", text: message });
+      setInversaDeleteOpen(false);
+    } finally {
+      setInversaDeleting(false);
     }
   }
 
@@ -1540,6 +1662,48 @@ export default function LogisticaDashboard() {
     ]
   );
 
+  useEffect(() => {
+    setInversaSelectedIds(new Set());
+    setInversaDeleteOpen(false);
+  }, [
+    inversaFilterTexto,
+    gestionEstadoFiltros,
+    estadoRepuestoFiltros,
+    inversaFechaDesde,
+    inversaFechaHasta,
+  ]);
+
+  const inversaSelectedItems = useMemo(() => {
+    const byId = new Map(inversaItems.map((row) => [row.id, row] as const));
+    return Array.from(inversaSelectedIds)
+      .map((id) => byId.get(id))
+      .filter((row): row is LogisticaInversaRow => row != null);
+  }, [inversaItems, inversaSelectedIds]);
+
+  const inversaLoadedFilteredIds = useMemo(
+    () => filteredInversa.map((row) => row.id).filter(Boolean),
+    [filteredInversa]
+  );
+
+  const inversaSelectedInViewCount = useMemo(
+    () =>
+      inversaLoadedFilteredIds.filter((id) => inversaSelectedIds.has(id))
+        .length,
+    [inversaLoadedFilteredIds, inversaSelectedIds]
+  );
+
+  const inversaAllLoadedFilteredSelected =
+    inversaLoadedFilteredIds.length > 0 &&
+    inversaSelectedInViewCount === inversaLoadedFilteredIds.length;
+
+  useEffect(() => {
+    const el = inversaSelectAllRef.current;
+    if (!el) return;
+    el.indeterminate =
+      inversaSelectedInViewCount > 0 &&
+      inversaSelectedInViewCount < inversaLoadedFilteredIds.length;
+  }, [inversaSelectedInViewCount, inversaLoadedFilteredIds.length]);
+
   const filteredPendientes = useMemo(() => {
     const textQuery = normalize(pendientesFilterTexto);
     if (!textQuery) return pendientesItems;
@@ -1618,7 +1782,7 @@ export default function LogisticaDashboard() {
       ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
       : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
 
-  const inversaColSpan = 10;
+  const inversaColSpan = canEliminarInversa ? 11 : 10;
   const inversaPaddingTop = inversaVirtualItems[0]?.start ?? 0;
   const inversaPaddingBottom =
     inversaVirtualizer.getTotalSize() -
@@ -2058,6 +2222,27 @@ export default function LogisticaDashboard() {
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
+              {canEliminarInversa ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setInversaDeleteMessage(null);
+                  setInversaDeleteOpen(true);
+                }}
+                disabled={
+                  inversaDeleting ||
+                  inversaSelectedIds.size === 0 ||
+                  inversaSelectedIds.size > INVERSA_DELETE_MAX
+                }
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                Eliminar seleccionadas
+                {inversaSelectedIds.size > 0
+                  ? ` (${inversaSelectedIds.size})`
+                  : ""}
+              </button>
+              ) : null}
               {canExportInversa ? (
               <button
                 type="button"
@@ -2148,6 +2333,19 @@ export default function LogisticaDashboard() {
           </div>
           )}
 
+          {inversaSubTab === "historial" && inversaDeleteMessage ? (
+            <p
+              role="status"
+              className={`text-right text-[11px] ${
+                inversaDeleteMessage.type === "success"
+                  ? "text-emerald-700"
+                  : "text-red-600"
+              }`}
+            >
+              {inversaDeleteMessage.text}
+            </p>
+          ) : null}
+
           {inversaSubTab === "historial" && inversaExportMessage ? (
             <p role="status" className="text-right text-[11px] text-red-600">
               {inversaExportMessage}
@@ -2210,6 +2408,25 @@ export default function LogisticaDashboard() {
               <table className="w-full table-fixed divide-y divide-border text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
+                    {canEliminarInversa ? (
+                    <th className="w-8 px-1.5 py-2">
+                      <input
+                        ref={inversaSelectAllRef}
+                        type="checkbox"
+                        checked={inversaAllLoadedFilteredSelected}
+                        disabled={
+                          inversaLoadedFilteredIds.length === 0 ||
+                          inversaDeleting
+                        }
+                        onChange={(e) =>
+                          toggleSelectAllLoadedFiltered(e.target.checked)
+                        }
+                        aria-label="Seleccionar filas filtradas cargadas"
+                        title="Selecciona solo las filas filtradas ya cargadas, no todo el servidor"
+                        className="h-3.5 w-3.5 rounded border-gray-300"
+                      />
+                    </th>
+                    ) : null}
                     <th className="w-[72px] px-1.5 py-2">Fecha Ent. Nuevo</th>
                     <th className="w-[130px] px-1.5 py-2">Cliente</th>
                     <th className="w-[56px] px-1.5 py-2">OT</th>
@@ -2281,6 +2498,11 @@ export default function LogisticaDashboard() {
                             isSelling={sellingId === rowId}
                             canEditar={canEditarInversa}
                             canCertify={canCertify}
+                            canEliminar={canEliminarInversa}
+                            selected={inversaSelectedIds.has(rowId)}
+                            onToggleSelect={(checked) =>
+                              toggleInversaSelected(rowId, checked)
+                            }
                             onStartEdit={() => startEditInversa(item)}
                             onLimpiar={() => void handleLimpiarInversa(rowId)}
                             onCertificar={() => void handleCertificar(rowId)}
@@ -2328,6 +2550,18 @@ export default function LogisticaDashboard() {
                 {filteredInversa.length} de {inversaItems.length} registro
                 {inversaItems.length === 1 ? "" : "s"}
                 {inversaHasMore ? " · hay más en servidor" : ""}
+                {canEliminarInversa ? (
+                  <span className="ml-2">
+                    · {inversaSelectedIds.size} seleccionada
+                    {inversaSelectedIds.size === 1 ? "" : "s"}
+                    {inversaHasMore
+                      ? " (solo filas filtradas ya cargadas, no todo el servidor)"
+                      : " (filas filtradas cargadas)"}
+                    {inversaSelectedIds.size > INVERSA_DELETE_MAX
+                      ? ` · máximo ${INVERSA_DELETE_MAX} por solicitud`
+                      : ""}
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -2396,6 +2630,88 @@ export default function LogisticaDashboard() {
             ) : null}
           </div>
           )}
+
+          {inversaDeleteOpen && canEliminarInversa ? (
+            <DialogShell
+              title="Eliminar registros de Historial"
+              onClose={closeInversaDeleteModal}
+            >
+              <p className="text-sm text-slate-700">
+                Se eliminarán de forma permanente{" "}
+                <strong>{inversaSelectedItems.length}</strong> registro
+                {inversaSelectedItems.length === 1 ? "" : "s"} completo
+                {inversaSelectedItems.length === 1 ? "" : "s"}, incluidos los
+                campos manuales (fecha de retorno, responsable, estado de
+                repuesto, observaciones, certificado y venta a chatarrero).
+                Esta acción no se puede deshacer.
+              </p>
+              <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-border">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-2 py-1.5">OT</th>
+                      <th className="px-2 py-1.5">Código</th>
+                      <th className="px-2 py-1.5">Placa</th>
+                      <th className="px-2 py-1.5">Descripción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border bg-white">
+                    {inversaSelectedItems.map((row) => (
+                      <tr key={row.id}>
+                        <td className="px-2 py-1.5 font-mono">
+                          {row.ot_numero != null && row.ot_numero !== ""
+                            ? String(row.ot_numero)
+                            : "-"}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono">
+                          {cellDash(row.linea_codigo)}
+                        </td>
+                        <td className="px-2 py-1.5">{cellDash(row.placa)}</td>
+                        <td className="max-w-[220px] truncate px-2 py-1.5" title={cellDash(row.linea_descripcion)}>
+                          {cellDash(row.linea_descripcion)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {inversaSelectedIds.size > INVERSA_DELETE_MAX ? (
+                <p className="mt-3 text-xs text-red-600">
+                  Máximo {INVERSA_DELETE_MAX} registros por solicitud. Hay{" "}
+                  {inversaSelectedIds.size} seleccionadas.
+                </p>
+              ) : null}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeInversaDeleteModal}
+                  disabled={inversaDeleting}
+                  className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmDeleteInversa()}
+                  disabled={
+                    inversaDeleting ||
+                    inversaSelectedItems.length === 0 ||
+                    inversaSelectedIds.size > INVERSA_DELETE_MAX
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {inversaDeleting ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      Eliminando...
+                    </>
+                  ) : (
+                    "Sí, eliminar"
+                  )}
+                </button>
+              </div>
+            </DialogShell>
+          ) : null}
 
           {editingInversaItem && !editingInversaItem.certificado_at ? (
             <InversaEditModal
@@ -2567,6 +2883,9 @@ function FragmentRow({
   isSelling,
   canEditar,
   canCertify,
+  canEliminar,
+  selected,
+  onToggleSelect,
   onStartEdit,
   onLimpiar,
   onCertificar,
@@ -2579,6 +2898,9 @@ function FragmentRow({
   isSelling: boolean;
   canEditar: boolean;
   canCertify: boolean;
+  canEliminar: boolean;
+  selected: boolean;
+  onToggleSelect: (checked: boolean) => void;
   onStartEdit: () => void;
   onLimpiar: () => void;
   onCertificar: () => void;
@@ -2597,6 +2919,17 @@ function FragmentRow({
             : "transition hover:bg-accent/5"
         }
       >
+        {canEliminar ? (
+        <td className="w-8 px-1.5 py-2">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => onToggleSelect(e.target.checked)}
+            aria-label={`Seleccionar OT ${item.ot_numero ?? ""} código ${item.linea_codigo ?? ""}`}
+            className="h-3.5 w-3.5 rounded border-gray-300"
+          />
+        </td>
+        ) : null}
         <td className="w-[72px] px-1.5 py-2 text-slate-700">
           <TruncCell value={formatFechaEntrega(item.linea_fecha_entrega)} />
         </td>

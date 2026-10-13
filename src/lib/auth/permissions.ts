@@ -109,7 +109,14 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
       {
         pestana: "inversa",
         label: "Logística inversa",
-        acciones: acciones(["ver", "editar", "certificar", "exportar", "sincronizar"]),
+        acciones: acciones([
+          "ver",
+          "editar",
+          "eliminar",
+          "certificar",
+          "exportar",
+          "sincronizar",
+        ]),
       },
       {
         pestana: "control_documentario",
