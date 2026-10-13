@@ -200,7 +200,7 @@ function buildListRequestBody(range: {
     voucher_query: null,
     work_order_general_statuses: null,
     work_order_number: null,
-    work_order_type_operations: [2, 4, 7],
+    work_order_type_operations: [2, 4, 6, 7],
   };
 }
 
