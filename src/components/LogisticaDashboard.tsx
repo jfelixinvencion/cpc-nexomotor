@@ -31,6 +31,13 @@ import LogisticaComprasTab from "@/components/LogisticaComprasTab";
 import LogisticaControlDocumentarioTab from "@/components/LogisticaControlDocumentarioTab";
 import LogisticaVentasTallerTab from "@/components/LogisticaVentasTallerTab";
 import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
+import {
+  displayEstadoRepuesto,
+  estadoRepuestoDatalistOptions,
+  estadoRepuestoFilterKey,
+  estadoRepuestoParaGuardar,
+  uniqueEstadoRepuestoFilterOptions,
+} from "@/lib/logistica-inversa-estado";
 
 const INVERSA_PAGE_SIZE = 200;
 const INVERSA_EXPORT_PAGE_SIZE = 500;
@@ -226,7 +233,9 @@ function filterHistorialInversa(
   { texto, estados, estadoRepuesto, desde, hasta }: HistorialInversaFilters
 ): LogisticaInversaRow[] {
   const textQuery = normalize(texto);
-  const estadoRepuestoNorm = new Set(estadoRepuesto.map((v) => normalize(v)));
+  const estadoRepuestoNorm = new Set(
+    estadoRepuesto.map((v) => estadoRepuestoFilterKey(v)).filter(Boolean)
+  );
   const applyFecha =
     (Boolean(desde) || Boolean(hasta)) &&
     !isInversaFechaRangeInvalid(desde, hasta);
@@ -261,7 +270,7 @@ function filterHistorialInversa(
     }
 
     if (estadoRepuestoNorm.size > 0) {
-      const rowEstado = normalize(item.estado_repuesto ?? "");
+      const rowEstado = estadoRepuestoFilterKey(item.estado_repuesto);
       if (!rowEstado || !estadoRepuestoNorm.has(rowEstado)) return false;
     }
 
@@ -510,7 +519,7 @@ function pendienteToForm(item: LogisticaInversaPendienteRow): PendienteForm {
         ? "1"
         : String(item.linea_cantidad),
     responsable_recepcion: item.responsable_recepcion ?? "",
-    estado_repuesto: item.estado_repuesto ?? "",
+    estado_repuesto: displayEstadoRepuesto(item.estado_repuesto),
     observaciones: item.observaciones ?? "",
   };
 }
@@ -527,7 +536,7 @@ function pendienteFormPayload(form: PendienteForm) {
     linea_descripcion: descripcion,
     linea_cantidad: Number.isFinite(qty) ? qty : 1,
     responsable_recepcion: form.responsable_recepcion.trim() || null,
-    estado_repuesto: form.estado_repuesto.trim() || null,
+    estado_repuesto: estadoRepuestoParaGuardar(form.estado_repuesto),
     observaciones: form.observaciones.trim() || null,
   };
 }
@@ -1065,7 +1074,7 @@ export default function LogisticaDashboard() {
             : formatCantidad(item.linea_cantidad),
         "Fecha Ent. Rep. Viejo": excelFecha(item.fecha_registro_retorno),
         "Resp. Entrega": asText(item.responsable_entrega),
-        "Estado Repuesto": asText(item.estado_repuesto),
+        "Estado Repuesto": displayEstadoRepuesto(item.estado_repuesto),
         Observaciones: asText(item.observaciones),
         Certificado: item.certificado_at ? "SÍ" : "NO",
         "Vendido Chatarrero": item.vendido_chatarrero_at ? "SÍ" : "NO",
@@ -1206,7 +1215,7 @@ export default function LogisticaDashboard() {
         ? isoToDateInput(item.fecha_registro_retorno)
         : todayYmdLocal(),
       responsable_entrega: item.responsable_entrega ?? "",
-      estado_repuesto: item.estado_repuesto ?? "",
+      estado_repuesto: displayEstadoRepuesto(item.estado_repuesto),
       observaciones: item.observaciones ?? "",
     });
   }
@@ -1234,7 +1243,7 @@ export default function LogisticaDashboard() {
     const updatedFields = {
       fecha_registro_retorno: fechaIso,
       responsable_entrega: editForm.responsable_entrega.trim() || null,
-      estado_repuesto: editForm.estado_repuesto.trim() || null,
+      estado_repuesto: estadoRepuestoParaGuardar(editForm.estado_repuesto),
       observaciones: editForm.observaciones.trim() || null,
     };
 
@@ -1626,7 +1635,7 @@ export default function LogisticaDashboard() {
 
   const estadoRepuestoOptions = useMemo(
     () =>
-      uniqueSorted([
+      estadoRepuestoDatalistOptions([
         ...inversaItems.map((i) => i.estado_repuesto),
         ...pendientesItems.map((i) => i.estado_repuesto),
       ]),
@@ -1634,7 +1643,10 @@ export default function LogisticaDashboard() {
   );
 
   const historialEstadoRepuestoOptions = useMemo(
-    () => uniqueSorted(inversaItems.map((i) => i.estado_repuesto)),
+    () =>
+      uniqueEstadoRepuestoFilterOptions(
+        inversaItems.map((i) => i.estado_repuesto)
+      ),
     [inversaItems]
   );
 
@@ -2212,10 +2224,7 @@ export default function LogisticaDashboard() {
               />
               <MultiSelectDropdown
                 label="Estado Repuesto"
-                options={historialEstadoRepuestoOptions.map((value) => ({
-                  value,
-                  label: value,
-                }))}
+                options={historialEstadoRepuestoOptions}
                 selected={estadoRepuestoFiltros}
                 onChange={setEstadoRepuestoFiltros}
               />
@@ -2960,7 +2969,9 @@ function FragmentRow({
             : formatCantidad(item.linea_cantidad)}
         </td>
         <td className="w-[96px] px-1.5 py-2 text-slate-700">
-          <TruncCell value={cellDash(item.estado_repuesto)} />
+          <TruncCell
+            value={cellDash(displayEstadoRepuesto(item.estado_repuesto) || item.estado_repuesto)}
+          />
         </td>
         <td className="w-[72px] px-1.5 py-2 text-slate-700">
           <TruncCell

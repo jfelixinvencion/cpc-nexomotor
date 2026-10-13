@@ -216,6 +216,11 @@ export const PERMISSION_CATALOG: PermisoCatalogoModulo[] = [
         label: "Ventas_Taller",
         acciones: acciones(["ver"]),
       },
+      {
+        pestana: "inversa",
+        label: "Log. Inversa",
+        acciones: acciones(["ver"]),
+      },
     ],
   },
 ];
