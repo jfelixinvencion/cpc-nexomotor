@@ -16,6 +16,7 @@ import {
   Shield,
   Tags,
   Truck,
+  Undo2,
   Users,
   Wrench,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import UsuariosDashboard from "@/components/UsuariosDashboard";
 import RepuestosClasificacionTab from "@/components/RepuestosClasificacionTab";
 import DashboardInventarioTab from "@/components/DashboardInventarioTab";
 import DashboardVentasTallerTab from "@/components/DashboardVentasTallerTab";
+import DashboardInversaTab from "@/components/DashboardInversaTab";
 import {
   AUTH_CHANGED_EVENT,
   invalidatePermisosCache,
@@ -852,19 +854,23 @@ function AdministracionView({ onBack }: { onBack: () => void }) {
   );
 }
 
+type TableroTab = "inventario" | "ventas_taller" | "inversa";
+
 function TableroView() {
   const { cargando, puede } = usePermisos();
   const canInventario = puede("dashboard", "inventario", "ver");
   const canVentasTaller = puede("dashboard", "ventas_taller", "ver");
-  const [tab, setTab] = useState<"inventario" | "ventas_taller">("inventario");
+  const canInversa = puede("dashboard", "inversa", "ver");
+  const [tab, setTab] = useState<TableroTab>("inventario");
 
   useEffect(() => {
-    if (tab === "inventario" && !canInventario && canVentasTaller) {
-      setTab("ventas_taller");
-    } else if (tab === "ventas_taller" && !canVentasTaller && canInventario) {
-      setTab("inventario");
-    }
-  }, [tab, canInventario, canVentasTaller]);
+    const allowed: TableroTab[] = [];
+    if (canInventario) allowed.push("inventario");
+    if (canVentasTaller) allowed.push("ventas_taller");
+    if (canInversa) allowed.push("inversa");
+    if (allowed.length === 0) return;
+    if (!allowed.includes(tab)) setTab(allowed[0]);
+  }, [tab, canInventario, canVentasTaller, canInversa]);
 
   const tabClass = (active: boolean) =>
     active
@@ -882,7 +888,7 @@ function TableroView() {
           Módulo activo
         </span>
         <p className="hidden text-xs text-muted sm:inline">
-          Indicadores de inventario y valorización del taller.
+          Indicadores de inventario, ventas de taller y logística inversa.
         </p>
       </div>
 
@@ -922,9 +928,24 @@ function TableroView() {
               ) : null}
             </button>
           ) : null}
+          {canInversa ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "inversa"}
+              onClick={() => setTab("inversa")}
+              className={tabClass(tab === "inversa")}
+            >
+              <Undo2 className="h-4 w-4" aria-hidden />
+              <span className="truncate">Log. Inversa</span>
+              {tab === "inversa" ? (
+                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-teal-600" />
+              ) : null}
+            </button>
+          ) : null}
         </div>
         <div role="tabpanel" className="p-3 sm:p-4">
-          {!cargando && !canInventario && !canVentasTaller ? (
+          {!cargando && !canInventario && !canVentasTaller && !canInversa ? (
             <p className="px-3 py-8 text-center text-sm text-muted">
               No tiene permiso para ver las pestañas del dashboard.
             </p>
@@ -932,6 +953,8 @@ function TableroView() {
             <DashboardInventarioTab />
           ) : tab === "ventas_taller" && canVentasTaller ? (
             <DashboardVentasTallerTab />
+          ) : tab === "inversa" && canInversa ? (
+            <DashboardInversaTab />
           ) : null}
         </div>
       </div>
