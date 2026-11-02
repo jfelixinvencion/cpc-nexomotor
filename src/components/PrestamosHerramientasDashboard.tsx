@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { NO_PERMISO_TITLE, usePermisos } from "@/lib/auth/usePermisos";
+import { CONFLICTO_ESTADO_MENSAJE } from "@/lib/almacen/herramientas-concurrencia";
 
 type PrestamosSubTab = "disponibles" | "pendientes" | "historial";
 
@@ -144,6 +146,12 @@ function formatSupabaseError(error: unknown, fallback = "Error desconocido") {
   return asString && asString !== "[object Object]" ? asString : fallback;
 }
 
+const HERRAMIENTA_DISPONIBLE_SELECT =
+  "id, codigo, descripcion, cantidad, ubicacion, responsable";
+
+const PRESTAMO_SELECT =
+  "id, herramienta_id, descripcion_herramienta, cantidad_prestada, cantidad_devuelta, responsable, destino, estado, fecha_hora_retiro, fecha_hora_devolucion_final";
+
 function mapHerramienta(row: Record<string, unknown>): HerramientaDisponible {
   return {
     id: Number(row.id),
@@ -153,6 +161,70 @@ function mapHerramienta(row: Record<string, unknown>): HerramientaDisponible {
     ubicacion: asText(row.ubicacion) || null,
     responsable: asText(row.responsable) || null,
   };
+}
+
+function mapPrestamo(row: Record<string, unknown>): PrestamoPendiente {
+  return {
+    id: Number(row.id),
+    herramienta_id:
+      row.herramienta_id == null ? null : Number(row.herramienta_id),
+    descripcion_herramienta: asText(row.descripcion_herramienta),
+    cantidad_prestada: Number(row.cantidad_prestada ?? 0),
+    cantidad_devuelta: Number(row.cantidad_devuelta ?? 0),
+    responsable: asText(row.responsable),
+    destino: asText(row.destino),
+    estado: asText(row.estado),
+    fecha_hora_retiro: asText(row.fecha_hora_retiro),
+    fecha_hora_devolucion_final:
+      asText(row.fecha_hora_devolucion_final) || null,
+  };
+}
+
+async function leerHerramientaDisponible(id: number) {
+  const { data, error } = await supabase
+    .from("herramientas")
+    .select(HERRAMIENTA_DISPONIBLE_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { estado: "error" as const };
+  if (!data) return { estado: "conflicto" as const };
+  const item = mapHerramienta(data as Record<string, unknown>);
+  if (item.cantidad <= 0 || !isUbicacionAlmacen(item.ubicacion)) {
+    return { estado: "conflicto" as const };
+  }
+  return { estado: "ok" as const, item };
+}
+
+async function leerPrestamoAbierto(id: number) {
+  const { data, error } = await supabase
+    .from("prestamos_herramientas")
+    .select(PRESTAMO_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { estado: "error" as const };
+  if (!data) return { estado: "conflicto" as const };
+  const item = mapPrestamo(data as Record<string, unknown>);
+  if (item.cantidad_prestada <= item.cantidad_devuelta) {
+    return { estado: "conflicto" as const };
+  }
+  return { estado: "ok" as const, item };
+}
+
+async function postMovimiento(url: string, body: Record<string, unknown>) {
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    success?: boolean;
+    error?: string;
+  };
+  return { res, json };
 }
 
 export default function PrestamosHerramientasDashboard() {
@@ -184,10 +256,14 @@ export default function PrestamosHerramientasDashboard() {
   const [devolverCantidad, setDevolverCantidad] = useState("1");
   const [devolverError, setDevolverError] = useState<string | null>(null);
   const [savingDevolver, setSavingDevolver] = useState(false);
+  const retiroKeyRef = useRef<string | null>(null);
+  const devolverKeyRef = useRef<string | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
+      setLoading(true);
+      setError(null);
+    }
 
     const since30d = new Date();
     since30d.setDate(since30d.getDate() - 30);
@@ -196,14 +272,12 @@ export default function PrestamosHerramientasDashboard() {
     const [dispRes, pendRes, histRes, planRes, rotacionRes] = await Promise.all([
       supabase
         .from("herramientas")
-        .select("id, codigo, descripcion, cantidad, ubicacion, responsable")
+        .select(HERRAMIENTA_DISPONIBLE_SELECT)
         .gt("cantidad", 0)
         .order("descripcion", { ascending: true }),
       supabase
         .from("prestamos_herramientas")
-        .select(
-          "id, herramienta_id, descripcion_herramienta, cantidad_prestada, cantidad_devuelta, responsable, destino, estado, fecha_hora_retiro, fecha_hora_devolucion_final"
-        )
+        .select(PRESTAMO_SELECT)
         .order("fecha_hora_retiro", { ascending: false }),
       supabase
         .from("historial_movimientos_herramientas")
@@ -239,7 +313,7 @@ export default function PrestamosHerramientasDashboard() {
       console.error("Error cargando préstamos de herramientas:", message, firstError);
       setError(message);
       setLoading(false);
-      return;
+      return false;
     }
 
     const retirosPorHerramienta = new Map<number, number>();
@@ -266,24 +340,7 @@ export default function PrestamosHerramientasDashboard() {
     setDisponibles(disponiblesMapped);
 
     const mappedPendientes = ((pendRes.data as Record<string, unknown>[]) ?? [])
-      .map((row) => {
-        const prestado = Number(row.cantidad_prestada ?? 0);
-        const devuelto = Number(row.cantidad_devuelta ?? 0);
-        return {
-          id: Number(row.id),
-          herramienta_id:
-            row.herramienta_id == null ? null : Number(row.herramienta_id),
-          descripcion_herramienta: asText(row.descripcion_herramienta),
-          cantidad_prestada: prestado,
-          cantidad_devuelta: devuelto,
-          responsable: asText(row.responsable),
-          destino: asText(row.destino),
-          estado: asText(row.estado),
-          fecha_hora_retiro: asText(row.fecha_hora_retiro),
-          fecha_hora_devolucion_final:
-            asText(row.fecha_hora_devolucion_final) || null,
-        } satisfies PrestamoPendiente;
-      })
+      .map(mapPrestamo)
       .filter((p) => p.cantidad_prestada > p.cantidad_devuelta);
 
     setPendientes(mappedPendientes);
@@ -310,10 +367,37 @@ export default function PrestamosHerramientasDashboard() {
     );
 
     setLoading(false);
+    if (opts?.silent) {
+      setError((prev) =>
+        prev === CONFLICTO_ESTADO_MENSAJE ? prev : null
+      );
+    }
+    return true;
   }, []);
 
   useEffect(() => {
     void loadData();
+  }, [loadData]);
+
+  // El repositorio no usa canales postgres_changes y no hay evidencia versionada
+  // de que estas tablas estén en supabase_realtime. Este refetch no garantiza
+  // concurrencia: eso lo hacen las funciones de Postgres.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void loadData({ silent: true });
+      }, 250);
+    };
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("focus", schedule);
+    return () => {
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("focus", schedule);
+      if (timer) clearTimeout(timer);
+    };
   }, [loadData]);
 
   const filteredDisponibles = useMemo(() => {
@@ -357,31 +441,72 @@ export default function PrestamosHerramientasDashboard() {
     });
   }, [historial, search]);
 
-  function openRetiro(item: HerramientaDisponible) {
-    setRetiroTarget(item);
+  async function rechazarPorCambio() {
+    retiroKeyRef.current = null;
+    devolverKeyRef.current = null;
+    setSavingRetiro(false);
+    setSavingDevolver(false);
+    setRetirosOpen(false);
+    setRetiroTarget(null);
+    setRetiroError(null);
+    setDevolverOpen(false);
+    setDevolverTarget(null);
+    setDevolverError(null);
+    await loadData();
+    setError(CONFLICTO_ESTADO_MENSAJE);
+  }
+
+  async function openRetiro(item: HerramientaDisponible) {
+    retiroKeyRef.current = null;
     setRetiroResponsable("");
     setRetiroDestino("Taller");
     setRetiroCantidad("1");
     setRetiroError(null);
+    const fresh = await leerHerramientaDisponible(item.id);
+    if (fresh.estado === "conflicto") {
+      await rechazarPorCambio();
+      return;
+    }
+    if (fresh.estado === "error") {
+      setRetiroTarget(item);
+      setRetirosOpen(true);
+      setRetiroError("No se pudo verificar el stock. Intenta de nuevo.");
+      return;
+    }
+    setRetiroTarget(fresh.item);
     setRetirosOpen(true);
   }
 
   function closeRetiro() {
     if (savingRetiro) return;
+    retiroKeyRef.current = null;
     setRetirosOpen(false);
     setRetiroTarget(null);
     setRetiroError(null);
   }
 
-  function openDevolver(item: PrestamoPendiente) {
-    setDevolverTarget(item);
+  async function openDevolver(item: PrestamoPendiente) {
+    devolverKeyRef.current = null;
     setDevolverCantidad("1");
     setDevolverError(null);
+    const fresh = await leerPrestamoAbierto(item.id);
+    if (fresh.estado === "conflicto") {
+      await rechazarPorCambio();
+      return;
+    }
+    if (fresh.estado === "error") {
+      setDevolverTarget(item);
+      setDevolverOpen(true);
+      setDevolverError("No se pudo verificar el préstamo. Intenta de nuevo.");
+      return;
+    }
+    setDevolverTarget(fresh.item);
     setDevolverOpen(true);
   }
 
   function closeDevolver() {
     if (savingDevolver) return;
+    devolverKeyRef.current = null;
     setDevolverOpen(false);
     setDevolverTarget(null);
     setDevolverError(null);
@@ -389,13 +514,12 @@ export default function PrestamosHerramientasDashboard() {
 
   async function handleRetiroSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!retiroTarget) return;
+    if (!retiroTarget || savingRetiro) return;
     setRetiroError(null);
 
     const cantidad = Number(retiroCantidad);
     const responsable = retiroResponsable.trim();
     const destino = retiroDestino.trim() || "Taller";
-    const descripcionHerramienta = herramientaLabel(retiroTarget);
 
     if (!responsable) {
       setRetiroError("Selecciona un responsable.");
@@ -416,85 +540,59 @@ export default function PrestamosHerramientasDashboard() {
       return;
     }
 
+    if (!retiroKeyRef.current) {
+      retiroKeyRef.current = crypto.randomUUID();
+    }
     setSavingRetiro(true);
 
-    const ahora = new Date().toISOString();
-    const { data: prestamo, error: prestamoError } = await supabase
-      .from("prestamos_herramientas")
-      .insert({
-        herramienta_id: retiroTarget.id,
-        descripcion_herramienta: descripcionHerramienta,
-        cantidad_prestada: cantidad,
-        cantidad_devuelta: 0,
-        responsable,
-        destino,
-        estado: "PENDIENTE",
-        fecha_hora_retiro: ahora,
-      })
-      .select("id")
-      .single();
+    try {
+      const fresh = await leerHerramientaDisponible(retiroTarget.id);
+      if (fresh.estado === "error") {
+        setRetiroError("No se pudo verificar el stock. Intenta de nuevo.");
+        setSavingRetiro(false);
+        return;
+      }
+      if (fresh.estado === "conflicto" || fresh.item.cantidad < cantidad) {
+        await rechazarPorCambio();
+        return;
+      }
 
-    if (prestamoError) {
-      const message = formatSupabaseError(
-        prestamoError,
-        "No se pudo registrar el préstamo"
+      const { res, json } = await postMovimiento(
+        "/api/almacen/herramientas/retiro",
+        {
+          idempotency_key: retiroKeyRef.current,
+          herramienta_id: retiroTarget.id,
+          cantidad,
+          responsable,
+          destino,
+        }
       );
-      console.error("Error al registrar préstamo:", message, prestamoError);
-      setRetiroError(message);
+
+      if (res.status === 409) {
+        await rechazarPorCambio();
+        return;
+      }
+      if (!res.ok || json.success === false) {
+        setRetiroError(json.error || "No se pudo registrar el préstamo");
+        setSavingRetiro(false);
+        return;
+      }
+
+      retiroKeyRef.current = null;
       setSavingRetiro(false);
-      return;
-    }
-
-    const { error: historialError } = await supabase
-      .from("historial_movimientos_herramientas")
-      .insert({
-        prestamo_id: prestamo?.id ?? null,
-        herramienta_id: retiroTarget.id,
-        descripcion_herramienta: descripcionHerramienta,
-        tipo_movimiento: "RETIRO",
-        cantidad,
-        responsable,
-        destino,
-        fecha_hora: ahora,
-      });
-
-    if (historialError) {
-      const message = formatSupabaseError(
-        historialError,
-        "No se pudo registrar el historial de retiro"
-      );
-      console.error("Error al registrar historial de retiro:", message, historialError);
-      setRetiroError(message);
+      setRetirosOpen(false);
+      setRetiroTarget(null);
+      await loadData();
+    } catch (err) {
+      console.error("Error al registrar retiro:", err);
+      setRetiroError("No se pudo registrar el préstamo");
       setSavingRetiro(false);
-      return;
     }
-
-    const nuevaCantidad = retiroTarget.cantidad - cantidad;
-    const { error: stockError } = await supabase
-      .from("herramientas")
-      .update({ cantidad: nuevaCantidad })
-      .eq("id", retiroTarget.id);
-
-    if (stockError) {
-      const message = formatSupabaseError(
-        stockError,
-        "No se pudo actualizar el stock"
-      );
-      console.error("Error al actualizar stock:", message, stockError);
-      setRetiroError(message);
-      setSavingRetiro(false);
-      return;
-    }
-
-    setSavingRetiro(false);
-    setRetirosOpen(false);
-    setRetiroTarget(null);
-    await loadData();
   }
 
   async function handleDevolverSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!devolverTarget) return;
+    if (!devolverTarget || savingDevolver) return;
     setDevolverError(null);
 
     const faltan =
@@ -514,106 +612,58 @@ export default function PrestamosHerramientasDashboard() {
       return;
     }
 
+    if (!devolverKeyRef.current) {
+      devolverKeyRef.current = crypto.randomUUID();
+    }
+    const cantidadDevueltaEsperada = devolverTarget.cantidad_devuelta;
     setSavingDevolver(true);
 
-    const nuevaDevuelta = devolverTarget.cantidad_devuelta + cantidad;
-    const completo = nuevaDevuelta >= devolverTarget.cantidad_prestada;
-    const ahora = new Date().toISOString();
+    try {
+      const fresh = await leerPrestamoAbierto(devolverTarget.id);
+      if (fresh.estado === "error") {
+        setDevolverError("No se pudo verificar el préstamo. Intenta de nuevo.");
+        setSavingDevolver(false);
+        return;
+      }
+      if (
+        fresh.estado === "conflicto" ||
+        fresh.item.cantidad_devuelta !== cantidadDevueltaEsperada ||
+        fresh.item.cantidad_prestada !== devolverTarget.cantidad_prestada
+      ) {
+        await rechazarPorCambio();
+        return;
+      }
 
-    const updatePayload: Record<string, unknown> = {
-      cantidad_devuelta: nuevaDevuelta,
-      estado: completo ? "DEVUELTO" : "PARCIAL",
-    };
-    if (completo) {
-      updatePayload.fecha_hora_devolucion_final = ahora;
-    }
-
-    const { error: updateError } = await supabase
-      .from("prestamos_herramientas")
-      .update(updatePayload)
-      .eq("id", devolverTarget.id)
-      .select("id")
-      .single();
-
-    if (updateError) {
-      const message = formatSupabaseError(
-        updateError,
-        "No se pudo actualizar el préstamo"
+      const { res, json } = await postMovimiento(
+        "/api/almacen/herramientas/devolucion",
+        {
+          idempotency_key: devolverKeyRef.current,
+          prestamo_id: devolverTarget.id,
+          cantidad,
+          cantidad_devuelta_esperada: cantidadDevueltaEsperada,
+        }
       );
-      console.error("Error al actualizar préstamo:", message, updateError);
-      setDevolverError(message);
-      setSavingDevolver(false);
-      return;
-    }
 
-    const { error: historialError } = await supabase
-      .from("historial_movimientos_herramientas")
-      .insert({
-        prestamo_id: devolverTarget.id,
-        herramienta_id: devolverTarget.herramienta_id,
-        descripcion_herramienta: devolverTarget.descripcion_herramienta,
-        tipo_movimiento: "DEVOLUCION",
-        cantidad,
-        responsable: devolverTarget.responsable,
-        destino: devolverTarget.destino,
-        fecha_hora: ahora,
-      });
-
-    if (historialError) {
-      const message = formatSupabaseError(
-        historialError,
-        "No se pudo registrar el historial de devolución"
-      );
-      console.error(
-        "Error al registrar historial de devolución:",
-        message,
-        historialError
-      );
-      setDevolverError(message);
-      setSavingDevolver(false);
-      return;
-    }
-
-    if (devolverTarget.herramienta_id != null) {
-      const { data: herramientaActual, error: fetchStockError } = await supabase
-        .from("herramientas")
-        .select("id, cantidad")
-        .eq("id", devolverTarget.herramienta_id)
-        .single();
-
-      if (fetchStockError) {
-        const message = formatSupabaseError(
-          fetchStockError,
-          "No se pudo leer el stock de la herramienta"
-        );
-        console.error("Error al leer stock:", message, fetchStockError);
-        setDevolverError(message);
+      if (res.status === 409) {
+        await rechazarPorCambio();
+        return;
+      }
+      if (!res.ok || json.success === false) {
+        setDevolverError(json.error || "No se pudo registrar la devolución");
         setSavingDevolver(false);
         return;
       }
 
-      const stockActual = Number(herramientaActual?.cantidad ?? 0);
-      const { error: stockError } = await supabase
-        .from("herramientas")
-        .update({ cantidad: stockActual + cantidad })
-        .eq("id", devolverTarget.herramienta_id);
-
-      if (stockError) {
-        const message = formatSupabaseError(
-          stockError,
-          "No se pudo devolver el stock"
-        );
-        console.error("Error al devolver stock:", message, stockError);
-        setDevolverError(message);
-        setSavingDevolver(false);
-        return;
-      }
+      devolverKeyRef.current = null;
+      setSavingDevolver(false);
+      setDevolverOpen(false);
+      setDevolverTarget(null);
+      await loadData();
+    } catch (err) {
+      console.error("Error al registrar devolución:", err);
+      setDevolverError("No se pudo registrar la devolución");
+      setSavingDevolver(false);
     }
-
-    setSavingDevolver(false);
-    setDevolverOpen(false);
-    setDevolverTarget(null);
-    await loadData();
   }
 
   const subTabs = [
@@ -729,7 +779,7 @@ export default function PrestamosHerramientasDashboard() {
                         {canPrestar ? (
                         <button
                           type="button"
-                          onClick={() => openRetiro(item)}
+                          onClick={() => void openRetiro(item)}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-amber-700"
                         >
                           Retirar
@@ -808,7 +858,7 @@ export default function PrestamosHerramientasDashboard() {
                           {canDevolver ? (
                           <button
                             type="button"
-                            onClick={() => openDevolver(item)}
+                            onClick={() => void openDevolver(item)}
                             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
                           >
                             <Undo2 className="h-3.5 w-3.5" aria-hidden />

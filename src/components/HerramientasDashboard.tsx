@@ -16,7 +16,9 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { adminFetch } from "@/lib/auth/admin-fetch";
 import { usePermisos } from "@/lib/auth/usePermisos";
+import { CONFLICTO_ESTADO_MENSAJE } from "@/lib/almacen/herramientas-concurrencia";
 
 export type Herramienta = {
   id: number;
@@ -107,6 +109,7 @@ export default function HerramientasDashboard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [cantidadEsperada, setCantidadEsperada] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [codigoLocked, setCodigoLocked] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Herramienta | null>(null);
@@ -168,21 +171,38 @@ export default function HerramientasDashboard() {
 
   function openCreate() {
     setEditingId(null);
+    setCantidadEsperada(null);
     setForm(emptyForm);
     setFormError(null);
     setCodigoLocked(false);
     setModalOpen(true);
   }
 
-  function openEdit(item: Herramienta) {
-    setEditingId(item.id);
+  async function openEdit(item: Herramienta) {
+    const { data, error: fetchError } = await supabase
+      .from("herramientas")
+      .select("*")
+      .eq("id", item.id)
+      .maybeSingle();
+    if (fetchError) {
+      setError(fetchError.message);
+      return;
+    }
+    if (!data) {
+      await fetchHerramientas();
+      setError(CONFLICTO_ESTADO_MENSAJE);
+      return;
+    }
+    const mapped = mapHerramienta(data as Record<string, unknown>);
+    setEditingId(mapped.id);
+    setCantidadEsperada(mapped.cantidad);
     setForm({
-      id: item.id,
-      descripcion: item.descripcion ?? "",
-      codigo: item.codigo ?? "",
-      cantidad: String(item.cantidad ?? 1),
-      responsable: item.responsable ?? "",
-      ubicacion: item.ubicacion ?? "",
+      id: mapped.id,
+      descripcion: mapped.descripcion ?? "",
+      codigo: mapped.codigo ?? "",
+      cantidad: String(mapped.cantidad ?? 1),
+      responsable: mapped.responsable ?? "",
+      ubicacion: mapped.ubicacion ?? "",
     });
     setFormError(null);
     setCodigoLocked(false);
@@ -193,6 +213,7 @@ export default function HerramientasDashboard() {
     if (saving) return;
     setModalOpen(false);
     setEditingId(null);
+    setCantidadEsperada(null);
     setForm(emptyForm);
     setFormError(null);
     setCodigoLocked(false);
@@ -266,42 +287,54 @@ export default function HerramientasDashboard() {
 
     setSaving(true);
 
-    // TODO(auth-enforced): el dashboard escribe por supabase client; migrar a /api/herramientas.
-    if (editingId != null) {
-      const { error: updateError } = await supabase
-        .from("herramientas")
-        .update({
-          codigo,
-          descripcion,
-          cantidad,
-          responsable,
-          ubicacion,
-        })
-        .eq("id", editingId);
+    try {
+      if (editingId != null) {
+        if (
+          cantidadEsperada == null ||
+          !Number.isInteger(cantidadEsperada) ||
+          cantidadEsperada < 0
+        ) {
+          setFormError("No se pudo verificar el stock. Vuelve a abrir el registro.");
+          setSaving(false);
+          return;
+        }
 
-      if (updateError) {
-        console.error("Error al actualizar herramienta:", updateError);
-        setFormError(updateError.message);
-        setSaving(false);
-        return;
+        const result = await adminFetch<unknown>(`/api/herramientas/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...payload, cantidad_esperada: cantidadEsperada }),
+        });
+
+        if (!result.ok) {
+          if (result.status === 409 || result.status === 404) {
+            setSaving(false);
+            setModalOpen(false);
+            setEditingId(null);
+            setCantidadEsperada(null);
+            setForm(emptyForm);
+            setFormError(null);
+            setCodigoLocked(false);
+            await fetchHerramientas();
+            setError(result.error || CONFLICTO_ESTADO_MENSAJE);
+            return;
+          }
+          setFormError(result.error);
+          setSaving(false);
+          return;
+        }
+      } else {
+        const result = await adminFetch<unknown>("/api/herramientas", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result.ok) {
+          setFormError(result.error);
+          setSaving(false);
+          return;
+        }
       }
-
-      setSaving(false);
-      setModalOpen(false);
-      setEditingId(null);
-      setForm(emptyForm);
-      setFormError(null);
-      await fetchHerramientas();
-      return;
-    }
-
-    const { error: insertError } = await supabase
-      .from("herramientas")
-      .insert(payload);
-
-    if (insertError) {
-      console.error("Error al insertar herramienta:", insertError);
-      setFormError(insertError.message);
+    } catch (err) {
+      console.error("Error al guardar herramienta:", err);
+      setFormError("No se pudo completar la operación.");
       setSaving(false);
       return;
     }
@@ -309,8 +342,10 @@ export default function HerramientasDashboard() {
     setSaving(false);
     setModalOpen(false);
     setEditingId(null);
+    setCantidadEsperada(null);
     setForm(emptyForm);
     setFormError(null);
+    setCodigoLocked(false);
     await fetchHerramientas();
   }
 
@@ -321,14 +356,21 @@ export default function HerramientasDashboard() {
     setDeleting(true);
     setDeleteError(null);
 
-    const { error: deleteErr } = await supabase
-      .from("herramientas")
-      .delete()
-      .eq("id", id);
+    let result: Awaited<ReturnType<typeof adminFetch<unknown>>>;
+    try {
+      result = await adminFetch<unknown>(`/api/herramientas/${id}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      console.error("Error al eliminar herramienta:", err);
+      setDeleteError("No se pudo completar la operación.");
+      setDeleting(false);
+      return;
+    }
 
-    if (deleteErr) {
-      console.error("Error al eliminar herramienta:", deleteErr);
-      setDeleteError(deleteErr.message);
+    if (!result.ok) {
+      console.error("Error al eliminar herramienta:", result.error);
+      setDeleteError(result.error);
       setDeleting(false);
       return;
     }
@@ -480,7 +522,7 @@ export default function HerramientasDashboard() {
                         {canEditar ? (
                         <button
                           type="button"
-                          onClick={() => openEdit(item)}
+                          onClick={() => void openEdit(item)}
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-emerald-100 hover:text-emerald-700"
                           aria-label={`Editar ${item.descripcion}`}
                           title="Editar"
