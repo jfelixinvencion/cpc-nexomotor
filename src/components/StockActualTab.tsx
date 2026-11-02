@@ -1,10 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, RefreshCw, X } from "lucide-react";
+import { FileSpreadsheet, Loader2, RefreshCw, X } from "lucide-react";
+import * as XLSX from "xlsx";
 import { usePermisos } from "@/lib/auth/usePermisos";
 
 const PAGE_SIZE = 50;
+
+const EXCEL_HEADERS = [
+  "CODIGO",
+  "DESCRIPCION",
+  "UBICACION",
+  "STOCK",
+  "C. UNIT INC. IGV",
+] as const;
 
 type StockRow = {
   codigo: string;
@@ -58,8 +67,58 @@ function isZeroStock(value: number | string | null | undefined) {
   return Number.isFinite(n) && n === 0;
 }
 
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function todayYmdLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function finiteNumber(value: number | string | null | undefined) {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function excelStock(value: number | string | null | undefined) {
+  const n = finiteNumber(value);
+  if (n == null) return null;
+  return Math.trunc(n);
+}
+
+function excelCostoIncIgv(value: number | string | null | undefined) {
+  const n = finiteNumber(value);
+  if (n == null) return null;
+  return Math.round(n * 1.18 * 100) / 100;
+}
+
+function applyStockNumberFormats(worksheet: XLSX.WorkSheet) {
+  const ref = worksheet["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
+    const stock = worksheet[XLSX.utils.encode_cell({ r, c: 3 })] as
+      | XLSX.CellObject
+      | undefined;
+    if (stock && typeof stock.v === "number") {
+      stock.t = "n";
+      stock.z = "0";
+    }
+    const costo = worksheet[XLSX.utils.encode_cell({ r, c: 4 })] as
+      | XLSX.CellObject
+      | undefined;
+    if (costo && typeof costo.v === "number") {
+      costo.t = "n";
+      costo.z = "#,##0.00";
+    }
+  }
+}
+
 export default function StockActualTab() {
   const { puede } = usePermisos();
+  const canVer = puede("almacen", "stock_actual", "ver");
   const canSincronizar = puede("almacen", "stock_actual", "sincronizar");
   const [items, setItems] = useState<StockRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,6 +127,7 @@ export default function StockActualTab() {
   const [hideZeroStock, setHideZeroStock] = useState(true);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [syncing, setSyncing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState<{
     type: "success" | "error";
     text: string;
@@ -158,6 +218,42 @@ export default function StockActualTab() {
     return () => observer.disconnect();
   }, [hasMore, loading, filtered.length, visibleCount]);
 
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      const sheetRows: (string | number | null)[][] = [
+        [...EXCEL_HEADERS],
+        ...filtered.map((row) => [
+          row.codigo || "-",
+          row.repuesto || "-",
+          row.ubicacion || "-",
+          excelStock(row.stock),
+          excelCostoIncIgv(row.costo_unitario_soles),
+        ]),
+      ];
+      const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
+      applyStockNumberFormats(worksheet);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Stock Actual");
+      XLSX.writeFile(workbook, `stock_actual_${todayYmdLocal()}.xlsx`);
+      if (filtered.length === 0) {
+        flash(
+          "success",
+          "No hay filas para exportar. Se descargó un Excel solo con encabezados."
+        );
+      }
+    } catch (err) {
+      flash(
+        "error",
+        err instanceof Error ? err.message : "Error al exportar"
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function handleSync() {
     if (syncing) return;
     setSyncing(true);
@@ -233,6 +329,21 @@ export default function StockActualTab() {
           >
             {hideZeroStock ? "Mostrar todo" : "Ocultar sin stock"}
           </button>
+          {canVer ? (
+            <button
+              type="button"
+              onClick={() => void handleExport()}
+              disabled={exporting}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-60"
+            >
+              {exporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+              )}
+              {exporting ? "Exportando..." : "Exportar a Excel"}
+            </button>
+          ) : null}
           {canSincronizar ? (
             <button
               type="button"
