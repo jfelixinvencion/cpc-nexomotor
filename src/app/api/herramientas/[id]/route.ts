@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { enforceIfRealSession } from "@/lib/auth/require";
+import { CONFLICTO_ESTADO_MENSAJE } from "@/lib/almacen/herramientas-concurrencia";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -32,6 +33,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       codigo?: string;
       descripcion?: string;
       cantidad?: number;
+      cantidad_esperada?: number;
       responsable?: string | null;
       ubicacion?: string | null;
     };
@@ -39,10 +41,19 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     const codigo = body.codigo?.trim() ?? "";
     const descripcion = body.descripcion?.trim() ?? "";
     const cantidad = Number(body.cantidad);
+    const cantidadEsperada = body.cantidad_esperada;
     const responsable = body.responsable?.trim() || null;
     const ubicacion = body.ubicacion?.trim() || null;
 
-    if (!codigo || !descripcion || !Number.isFinite(cantidad) || cantidad < 0) {
+    if (
+      !codigo ||
+      !descripcion ||
+      !Number.isFinite(cantidad) ||
+      cantidad < 0 ||
+      typeof cantidadEsperada !== "number" ||
+      !Number.isInteger(cantidadEsperada) ||
+      cantidadEsperada < 0
+    ) {
       return NextResponse.json(
         { success: false, error: "Datos inválidos" },
         { status: 400 }
@@ -53,13 +64,44 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       .from("herramientas")
       .update({ codigo, descripcion, cantidad, responsable, ubicacion })
       .eq("id", id)
+      .eq("cantidad", cantidadEsperada)
       .select("*")
-      .single();
+      .maybeSingle();
 
     if (error) {
+      console.error("[herramientas] update:", error.message);
       return NextResponse.json(
-        { success: false, error: error.message },
+        { success: false, error: "Error interno." },
         { status: 500 }
+      );
+    }
+
+    if (!data) {
+      const { data: exists, error: existsError } = await supabaseAdmin
+        .from("herramientas")
+        .select("id")
+        .eq("id", id)
+        .maybeSingle();
+      if (existsError) {
+        console.error("[herramientas] update exists:", existsError.message);
+        return NextResponse.json(
+          { success: false, error: "Error interno." },
+          { status: 500 }
+        );
+      }
+      if (!exists) {
+        return NextResponse.json(
+          { success: false, error: "No se encontró la herramienta." },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          codigo: "STOCK_CAMBIO",
+          error: CONFLICTO_ESTADO_MENSAJE,
+        },
+        { status: 409 }
       );
     }
 
