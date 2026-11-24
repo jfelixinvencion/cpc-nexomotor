@@ -21,6 +21,32 @@ const DETAIL_WAVE_PAUSE_MS = 350;
 const DETAIL_RETRY_DELAYS_MS = [4000, 7000] as const;
 const FACTURADO_STATUS = "FACTURADO";
 
+/**
+ * Clientes Preventivo que sí entran a logística inversa.
+ * Deben coincidir con la grafía exacta de Sigma (detalle: client.names).
+ * La comparación es exacta tras trim: este archivo no pasa los nombres
+ * de cliente a minúsculas.
+ */
+const PREVENTIVO_CLIENTES_PERMITIDOS = [
+  "LISTO TAXI S.A.C.",
+  "TRANSPORTES CARRARA S.A.C.",
+] as const;
+
+/**
+ * client_query solo acota el listado Preventivo.
+ * La pertenencia la deciden PREVENTIVO_CLIENTES_PERMITIDOS.
+ */
+const PREVENTIVO_CLIENT_QUERIES = ["LISTO TAXI", "CARRARA"] as const;
+
+/**
+ * Tope de páginas por cada client_query del listado Preventivo.
+ * per_page es 200, así que 10 páginas cubren 2000 OTs por término:
+ * por encima del universo Preventivo medido en la ventana (~713, 4 páginas)
+ * y de los dos clientes objetivo (~33 OTs, 1 página cada uno).
+ * Al llegar al tope se deja constancia en el log y no se piden más páginas.
+ */
+const PREVENTIVO_MAX_PAGES = 10;
+
 /** Prefer real delivery/dispatch fields; never created_at / updated_at. */
 const SPARE_DELIVERY_DATE_FIELDS = [
   "delivery_date",
@@ -158,7 +184,7 @@ function addCalendarDaysYmd(ymd: string, days: number): string {
   return utc.toISOString().slice(0, 10);
 }
 
-/** OT entry date: today-30 … today+1 (Lima), not spare delivery date. */
+/** OT entry date: today-60 … today+1 (Lima; LOOKBACK_DAYS / LOOKAHEAD_DAYS), not spare delivery date. */
 function computeEntryDateRange(now = new Date()): { start: string; end: string } {
   const today = formatYmdInTimeZone(now, ENTRY_TZ);
   return {
@@ -167,16 +193,25 @@ function computeEntryDateRange(now = new Date()): { start: string; end: string }
   };
 }
 
-function buildListRequestBody(range: {
-  start: string;
-  end: string;
-}): Record<string, unknown> {
+type ListRequestOptions = {
+  page?: number;
+  clientQuery?: string | null;
+  workOrderTypeOperations?: number[];
+};
+
+function buildListRequestBody(
+  range: {
+    start: string;
+    end: string;
+  },
+  options?: ListRequestOptions
+): Record<string, unknown> {
   return {
     advisor_ids: null,
     brand_id: null,
     car_plate: null,
     car_vin: null,
-    client_query: null,
+    client_query: options?.clientQuery ?? null,
     close_date_range: null,
     delivery_date_range: {
       start: null,
@@ -189,7 +224,7 @@ function buildListRequestBody(range: {
     insurer_id: null,
     invoice_date_range: null,
     is_quote: 0,
-    page: LIST_PAGE,
+    page: options?.page ?? LIST_PAGE,
     per_page: PER_PAGE,
     sort_by: null,
     sort_direction: null,
@@ -200,7 +235,9 @@ function buildListRequestBody(range: {
     voucher_query: null,
     work_order_general_statuses: null,
     work_order_number: null,
-    work_order_type_operations: [2, 4, 6, 7],
+    work_order_type_operations: options?.workOrderTypeOperations ?? [
+      2, 4, 6, 7,
+    ],
   };
 }
 
@@ -537,9 +574,10 @@ type ListFetchResult =
 
 async function fetchWorkOrderListPage(
   token: string,
-  range: { start: string; end: string }
+  range: { start: string; end: string },
+  options?: ListRequestOptions
 ): Promise<ListFetchResult> {
-  const body = buildListRequestBody(range);
+  const body = buildListRequestBody(range, options);
   const tenantId = requireTenantId();
 
   const res = await fetch(LIST_URL, {
@@ -716,6 +754,16 @@ function resolvePlaca(detail: SpareDetailPayload): string | null {
  * cliente_nombre from client.names + first_lastname + second_lastname
  * (omit null parts). Fallback to client_name if present.
  */
+function isPreventivoClientePermitido(
+  nombre: string | null | undefined
+): boolean {
+  if (nombre == null) return false;
+  const trimmed = nombre.trim();
+  return (PREVENTIVO_CLIENTES_PERMITIDOS as readonly string[]).includes(
+    trimmed
+  );
+}
+
 function resolveClienteNombre(detail: SpareDetailPayload): string | null {
   const client = detail.client;
   if (client && typeof client === "object") {
@@ -895,6 +943,158 @@ async function upsertFillNullHeaders(
   return attempted;
 }
 
+function absorbListedWorkOrder(
+  wo: SigmaWorkOrderListItem,
+  ids: number[],
+  otNumeroById: Map<number, string>,
+  generalStatusesById: Map<number, Set<string>>
+): number | null {
+  const id = parseOtId(wo.id);
+  if (id == null) return null;
+  ids.push(id);
+  const otNum =
+    asNonEmptyString(wo.work_order_number) ?? asNonEmptyString(wo.number);
+  if (otNum) otNumeroById.set(id, otNum);
+  const rawStatus =
+    typeof wo.general_status === "string" ? wo.general_status.trim() : "";
+  if (!generalStatusesById.has(id)) {
+    generalStatusesById.set(id, new Set());
+  }
+  if (rawStatus) generalStatusesById.get(id)!.add(rawStatus);
+  return id;
+}
+
+function readWorkOrderListPageInfo(payload: unknown): {
+  lastPage: number | null;
+  currentPage: number | null;
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { lastPage: null, currentPage: null };
+  }
+  const data = (payload as Record<string, unknown>).data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { lastPage: null, currentPage: null };
+  }
+  const pagination = (data as Record<string, unknown>).pagination;
+  if (
+    !pagination ||
+    typeof pagination !== "object" ||
+    Array.isArray(pagination)
+  ) {
+    return { lastPage: null, currentPage: null };
+  }
+  const pag = pagination as Record<string, unknown>;
+  const last = Number(pag.last_page);
+  const current = Number(pag.current_page);
+  return {
+    lastPage: Number.isFinite(last) && last >= 1 ? Math.trunc(last) : null,
+    currentPage:
+      Number.isFinite(current) && current >= 1 ? Math.trunc(current) : null,
+  };
+}
+
+type PreventivoListStats = {
+  client_queries: string[];
+  pages_fetched: number;
+  page_cap: number;
+  capped: boolean;
+  raw_rows: number;
+  accepted_on_list: number;
+  discarded_on_list: number;
+  list_error: string | null;
+};
+
+async function fetchListPageWithAuth(
+  tokenRef: { token: string },
+  range: { start: string; end: string },
+  options: ListRequestOptions
+): Promise<ListFetchResult> {
+  let result = await fetchWorkOrderListPage(tokenRef.token, range, options);
+  if (!result.ok && (result.status === 401 || result.status === 403)) {
+    tokenRef.token = await sigmaLogin();
+    result = await fetchWorkOrderListPage(tokenRef.token, range, options);
+  }
+  return result;
+}
+
+/**
+ * Segundo listado: solo tipo 5. Pagina cada client_query hasta agotar
+ * last_page, con tope PREVENTIVO_MAX_PAGES. El nombre se filtra aquí
+ * por igualdad exacta tras trim; el detalle vuelve a validarlo.
+ */
+async function listPreventivoWorkOrders(
+  tokenRef: { token: string },
+  range: { start: string; end: string }
+): Promise<{ items: SigmaWorkOrderListItem[]; stats: PreventivoListStats }> {
+  const items: SigmaWorkOrderListItem[] = [];
+  const stats: PreventivoListStats = {
+    client_queries: [...PREVENTIVO_CLIENT_QUERIES],
+    pages_fetched: 0,
+    page_cap: PREVENTIVO_MAX_PAGES,
+    capped: false,
+    raw_rows: 0,
+    accepted_on_list: 0,
+    discarded_on_list: 0,
+    list_error: null,
+  };
+
+  for (const query of PREVENTIVO_CLIENT_QUERIES) {
+    for (let page = 1; page <= PREVENTIVO_MAX_PAGES; page++) {
+      const result = await fetchListPageWithAuth(tokenRef, range, {
+        page,
+        clientQuery: query,
+        workOrderTypeOperations: [5],
+      });
+      if (!result.ok) {
+        stats.list_error = `report-api preventivo HTTP ${result.status} client_query=${query} page=${page}`;
+        console.error(`[sync-inversa] ${stats.list_error}`);
+        return { items, stats };
+      }
+
+      stats.pages_fetched += 1;
+      const payload = coercePayload(result.json);
+      const { list } = extractWorkOrderList(payload);
+      const pageInfo = readWorkOrderListPageInfo(payload);
+      stats.raw_rows += list.length;
+
+      for (const wo of list) {
+        const nombre = asNonEmptyString(wo.client_name);
+        if (!isPreventivoClientePermitido(nombre)) {
+          stats.discarded_on_list += 1;
+          const id = parseOtId(wo.id);
+          console.warn(
+            `[sync-inversa] OT id=${id ?? "?"} descartada en listado preventivo: client_name="${nombre ?? ""}" no coincide tras trim con los clientes permitidos`
+          );
+          continue;
+        }
+        items.push(wo);
+        stats.accepted_on_list += 1;
+      }
+
+      if (pageInfo.currentPage != null && pageInfo.currentPage !== page) {
+        console.warn(
+          `[sync-inversa] preventivo client_query="${query}" página pedida ${page} pero Sigma respondió current_page=${pageInfo.currentPage}; se detiene este listado`
+        );
+        break;
+      }
+
+      const moreByPagination =
+        pageInfo.lastPage != null && page < pageInfo.lastPage;
+      const moreBySize = pageInfo.lastPage == null && list.length >= PER_PAGE;
+      if (!moreByPagination && !moreBySize) break;
+      if (page === PREVENTIVO_MAX_PAGES) {
+        stats.capped = true;
+        console.warn(
+          `[sync-inversa] preventivo client_query="${query}" alcanzó el tope de ${PREVENTIVO_MAX_PAGES} páginas (per_page ${PER_PAGE}); no se piden más`
+        );
+        break;
+      }
+    }
+  }
+
+  return { items, stats };
+}
+
 function isListedAsFacturado(statuses: Set<string> | undefined) {
   if (!statuses || statuses.size === 0) return false;
   return [...statuses].every((status) => isFacturadoStatus(status));
@@ -1067,22 +1267,11 @@ export async function POST(request: NextRequest) {
     const generalStatusesById = new Map<number, Set<string>>();
     const ids: number[] = [];
     for (const wo of list) {
-      const id = parseOtId(wo.id);
-      if (id == null) continue;
-      ids.push(id);
-      const otNum =
-        asNonEmptyString(wo.work_order_number) ?? asNonEmptyString(wo.number);
-      if (otNum) otNumeroById.set(id, otNum);
-      const rawStatus =
-        typeof wo.general_status === "string" ? wo.general_status.trim() : "";
-      if (!generalStatusesById.has(id)) {
-        generalStatusesById.set(id, new Set());
-      }
-      if (rawStatus) generalStatusesById.get(id)!.add(rawStatus);
+      absorbListedWorkOrder(wo, ids, otNumeroById, generalStatusesById);
     }
-    const uniqueIds = Array.from(new Set(ids));
+    const generalIds = Array.from(new Set(ids));
     console.log(
-      `[sync-inversa] unique OT ids from list: ${uniqueIds.length} (raw rows=${list.length})`
+      `[sync-inversa] unique OT ids from list: ${generalIds.length} (raw rows=${list.length})`
     );
 
     const diagnostics: ListDiagnostics = {
@@ -1090,7 +1279,7 @@ export async function POST(request: NextRequest) {
       top_level_keys: topLevelKeys(payload),
       data_typeof: describeDataType(rootData),
       detected_count_before_id_filter: list.length,
-      unique_ot_ids: uniqueIds.length,
+      unique_ot_ids: generalIds.length,
       sample_first_3: list.slice(0, 3).map(sanitizeSampleItem),
       entry_date_range,
       request_body: listResult.body,
@@ -1105,7 +1294,7 @@ export async function POST(request: NextRequest) {
       spare_date_fields_used: [],
     };
 
-    if (uniqueIds.length === 0) {
+    if (list.length > 0 && generalIds.length === 0) {
       return NextResponse.json({
         success: false,
         entry_date_range,
@@ -1117,17 +1306,64 @@ export async function POST(request: NextRequest) {
         errors: [
           {
             id: -1,
-            error:
-              list.length === 0
-                ? "Listado vacío o estructura de respuesta no reconocida"
-                : "Se detectaron filas pero ningún id parseable",
+            error: "Se detectaron filas pero ningún id parseable",
           },
         ],
-        error:
-          list.length === 0
-            ? "Listado vacío o estructura de respuesta no reconocida"
-            : "Se detectaron filas pero ningún id parseable",
+        error: "Se detectaron filas pero ningún id parseable",
       });
+    }
+
+    const tokenRef = { token };
+    const preventivo = await listPreventivoWorkOrders(
+      tokenRef,
+      entry_date_range
+    );
+    const generalIdSet = new Set(generalIds);
+    const preventivoOnlyIds = new Set<number>();
+    for (const wo of preventivo.items) {
+      const id = absorbListedWorkOrder(
+        wo,
+        ids,
+        otNumeroById,
+        generalStatusesById
+      );
+      if (id == null) continue;
+      if (!generalIdSet.has(id)) preventivoOnlyIds.add(id);
+    }
+    const uniqueIds = Array.from(new Set(ids));
+    diagnostics.unique_ot_ids = uniqueIds.length;
+    console.log(
+      `[sync-inversa] preventivo páginas=${preventivo.stats.pages_fetched} filas=${preventivo.stats.raw_rows} aceptadas=${preventivo.stats.accepted_on_list} descartadas_listado=${preventivo.stats.discarded_on_list} ids_nuevos=${preventivoOnlyIds.size} capped=${preventivo.stats.capped}`
+    );
+    console.log(
+      `[sync-inversa] unique OT ids combinados: ${uniqueIds.length} (general=${generalIds.length})`
+    );
+
+    if (uniqueIds.length === 0) {
+      const emptyMessage =
+        preventivo.stats.list_error ??
+        "Listado vacío o estructura de respuesta no reconocida";
+      return NextResponse.json({
+        success: false,
+        entry_date_range,
+        total_listed: 0,
+        total_details_fetched: 0,
+        spares_with_delivery: 0,
+        inserted_attempted: 0,
+        diagnostics,
+        preventivo: { ...preventivo.stats, discarded_on_detail: 0 },
+        errors: [
+          {
+            id: -1,
+            error: emptyMessage,
+          },
+        ],
+        error: emptyMessage,
+      });
+    }
+
+    if (preventivo.stats.list_error) {
+      errors.push({ id: -1, error: preventivo.stats.list_error });
     }
 
     const completedFacturadaIds = await loadCompletedFacturadaOtIds(uniqueIds);
@@ -1141,12 +1377,12 @@ export async function POST(request: NextRequest) {
     const skippedFacturadaWithConstancia =
       uniqueIds.length - idsToFetch.length;
 
-    const tokenRef = { token };
     let insertedAttempted = 0;
     let detailsFetched = 0;
     let sparesWithDelivery = 0;
     let skippedNoSpares = 0;
     let skippedNoOtNumero = 0;
+    let preventivoDiscardedOnDetail = 0;
     const dateFieldsUsed = new Set<string>();
 
     for (let i = 0; i < idsToFetch.length; i += DETAIL_CONCURRENCY) {
@@ -1184,6 +1420,16 @@ export async function POST(request: NextRequest) {
         }
 
         detailsFetched += 1;
+        if (preventivoOnlyIds.has(r.id)) {
+          const clienteDetalle = resolveClienteNombre(r.detail);
+          if (!isPreventivoClientePermitido(clienteDetalle)) {
+            preventivoDiscardedOnDetail += 1;
+            console.warn(
+              `[sync-inversa] OT id=${r.id} descartada: cliente del detalle "${clienteDetalle ?? ""}" no está permitido para Preventivo`
+            );
+            continue;
+          }
+        }
         const fallbackOtNumero = otNumeroById.get(r.id) ?? null;
         const resolvedOtNumero = resolveOtNumero(r.detail, fallbackOtNumero);
         const facturada = isListedAsFacturado(generalStatusesById.get(r.id));
@@ -1267,7 +1513,7 @@ export async function POST(request: NextRequest) {
 
     diagnostics.spare_date_fields_used = Array.from(dateFieldsUsed);
     console.log(
-      `[sync-inversa] spares with delivery=${diagnostics.spares_with_delivery_date} without=${diagnostics.spares_without_delivery_date} empty_ot_ids=${diagnostics.ots_empty_spares.join(",") || "(none)"} fields=${diagnostics.spare_date_fields_used.join(",") || "(none)"} skipped_facturada_constancia=${skippedFacturadaWithConstancia}`
+      `[sync-inversa] spares with delivery=${diagnostics.spares_with_delivery_date} without=${diagnostics.spares_without_delivery_date} empty_ot_ids=${diagnostics.ots_empty_spares.join(",") || "(none)"} fields=${diagnostics.spare_date_fields_used.join(",") || "(none)"} skipped_facturada_constancia=${skippedFacturadaWithConstancia} preventivo_descartadas_detalle=${preventivoDiscardedOnDetail}`
     );
 
     return NextResponse.json({
@@ -1281,6 +1527,10 @@ export async function POST(request: NextRequest) {
       inserted_attempted: insertedAttempted,
       skipped_no_spares: skippedNoSpares,
       skipped_no_ot_numero: skippedNoOtNumero,
+      preventivo: {
+        ...preventivo.stats,
+        discarded_on_detail: preventivoDiscardedOnDetail,
+      },
       diagnostics,
       errors,
     });
