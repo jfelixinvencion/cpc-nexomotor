@@ -47,6 +47,26 @@ const PREVENTIVO_CLIENT_QUERIES = ["LISTO TAXI", "CARRARA"] as const;
  */
 const PREVENTIVO_MAX_PAGES = 10;
 
+/**
+ * Único mapa de tipo_ot. Claves: id de Sigma (type_operation_id.id)
+ * y el nombre normalizado (minúsculas, sin tildes) de operation_type
+ * o type_operation_id.name. El valor es el texto que se guarda.
+ */
+const TIPO_OT_POR_CLAVE: Record<string, string> = {
+  "2": "Correctivo",
+  correctivo: "Correctivo",
+  "4": "Garantia",
+  garantia: "Garantia",
+  "5": "Preventivo",
+  preventivo: "Preventivo",
+  "6": "Reclamo",
+  reclamo: "Reclamo",
+  "7": "Siniestro",
+  siniestro: "Siniestro",
+};
+
+type TipoOtColumnState = { missing: boolean };
+
 /** Prefer real delivery/dispatch fields; never created_at / updated_at. */
 const SPARE_DELIVERY_DATE_FIELDS = [
   "delivery_date",
@@ -100,6 +120,7 @@ type SpareDetailPayload = {
   client_name?: string | null;
   car?: SigmaCar | null;
   client?: SigmaClient | null;
+  type_operation_id?: { id?: string | number | null; name?: string | null } | null;
   spares?: SigmaSpare[] | null;
   services?: unknown;
   [key: string]: unknown;
@@ -114,6 +135,7 @@ type LogisticaInversaRow = {
   linea_descripcion: string | null;
   linea_cantidad: number | null;
   linea_fecha_entrega: string;
+  tipo_ot: string | null;
   source_payload: SigmaSpare;
 };
 
@@ -795,13 +817,103 @@ function dedupeRowsByOtAndCode(
   return Array.from(map.values());
 }
 
+function tipoClave(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return String(Number(trimmed));
+  return trimmed
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/** Id del detalle primero; si no está, el nombre del detalle; al final el listado. */
+function resolveTipoOt(
+  detail: SpareDetailPayload,
+  listOperationType: string | null
+): string | null {
+  const raw = detail.type_operation_id;
+  if (raw && typeof raw === "object") {
+    const byId = TIPO_OT_POR_CLAVE[tipoClave(raw.id) ?? ""];
+    if (byId) return byId;
+    const byName = TIPO_OT_POR_CLAVE[tipoClave(raw.name) ?? ""];
+    if (byName) return byName;
+  }
+  const fromList = TIPO_OT_POR_CLAVE[tipoClave(listOperationType) ?? ""];
+  return fromList ?? null;
+}
+
+function isMissingTipoOtColumn(message: string): boolean {
+  return (
+    /tipo_ot/i.test(message) &&
+    /schema cache|does not exist|could not find|column/i.test(message)
+  );
+}
+
+function noteTipoOtColumnMissing(state: TipoOtColumnState) {
+  if (state.missing) return;
+  state.missing = true;
+  console.warn(
+    "[sync-inversa] columna public.logistica_inversa.tipo_ot no existe; el sync continúa sin guardarla. Ejecute sql/logistica_inversa_tipo_ot.sql"
+  );
+}
+
+function withoutTipoOt(
+  row: LogisticaInversaRow
+): Omit<LogisticaInversaRow, "tipo_ot"> {
+  const { tipo_ot: _omit, ...rest } = row;
+  return rest;
+}
+
 /**
- * Map detail → rows. Header fields (placa, cliente, ot_numero) are shared
+ * Rellena tipo_ot solo donde sigue NULL. No toca un valor ya guardado
+ * ni certificado, retorno, responsable, estado u observaciones.
+ */
+async function fillNullTipoOt(
+  state: TipoOtColumnState,
+  assignments: Array<{ otId: number; tipo: string }>
+): Promise<void> {
+  if (state.missing || assignments.length === 0) return;
+
+  const idsByTipo = new Map<string, number[]>();
+  for (const { otId, tipo } of assignments) {
+    if (!tipo) continue;
+    const bucket = idsByTipo.get(tipo) ?? [];
+    bucket.push(otId);
+    idsByTipo.set(tipo, bucket);
+  }
+
+  for (const [tipo, otIds] of idsByTipo) {
+    const unique = Array.from(new Set(otIds));
+    for (let i = 0; i < unique.length; i += 200) {
+      const chunk = unique.slice(i, i + 200);
+      const { error } = await supabaseAdmin
+        .from("logistica_inversa")
+        .update({ tipo_ot: tipo })
+        .in("ot_id", chunk)
+        .is("tipo_ot", null);
+      if (!error) continue;
+      if (isMissingTipoOtColumn(error.message)) {
+        noteTipoOtColumnMissing(state);
+        return;
+      }
+      throw new Error(`Supabase tipo_ot backfill: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Map detail → rows. Header fields (placa, cliente, ot_numero, tipo_ot) are shared
  * across every spare line of the OT.
  */
 function rowsFromDetail(
   detail: SpareDetailPayload | null | undefined,
-  fallbackOtNumero: string | null
+  fallbackOtNumero: string | null,
+  listOperationType: string | null
 ): LogisticaInversaRow[] {
   if (!detail) return [];
 
@@ -823,6 +935,7 @@ function rowsFromDetail(
 
   const placa = resolvePlaca(detail);
   const clienteNombre = resolveClienteNombre(detail);
+  const tipoOt = resolveTipoOt(detail, listOperationType);
 
   const rows: LogisticaInversaRow[] = [];
 
@@ -848,6 +961,7 @@ function rowsFromDetail(
             ? Number(spare.quantity)
             : null,
       linea_fecha_entrega: delivery.value,
+      tipo_ot: tipoOt,
       source_payload: spare,
     });
   }
@@ -865,7 +979,8 @@ function rowsFromDetail(
  * estado_repuesto, observaciones.
  */
 async function upsertFillNullHeaders(
-  rows: LogisticaInversaRow[]
+  rows: LogisticaInversaRow[],
+  tipoOtColumn: TipoOtColumnState
 ): Promise<number> {
   const valid = dedupeRowsByOtAndCode(
     rows.filter(
@@ -882,16 +997,43 @@ async function upsertFillNullHeaders(
   let attempted = 0;
   for (let i = 0; i < valid.length; i += INSERT_BATCH) {
     const batch = valid.slice(i, i + INSERT_BATCH);
+    const payload = tipoOtColumn.missing
+      ? batch.map(withoutTipoOt)
+      : batch;
 
-    const { error: insertError } = await supabaseAdmin
+    let { error: insertError } = await supabaseAdmin
       .from("logistica_inversa")
-      .upsert(batch, {
+      .upsert(payload, {
         onConflict: "ot_id,linea_codigo",
         ignoreDuplicates: true,
       });
 
+    if (
+      insertError &&
+      !tipoOtColumn.missing &&
+      isMissingTipoOtColumn(insertError.message)
+    ) {
+      noteTipoOtColumnMissing(tipoOtColumn);
+      const retry = await supabaseAdmin
+        .from("logistica_inversa")
+        .upsert(batch.map(withoutTipoOt), {
+          onConflict: "ot_id,linea_codigo",
+          ignoreDuplicates: true,
+        });
+      insertError = retry.error;
+    }
+
     if (insertError) {
       throw new Error(`Supabase upsert insert: ${insertError.message}`);
+    }
+
+    if (!tipoOtColumn.missing) {
+      await fillNullTipoOt(
+        tipoOtColumn,
+        batch.flatMap((row) =>
+          row.tipo_ot ? [{ otId: row.ot_id, tipo: row.tipo_ot }] : []
+        )
+      );
     }
 
     const otIds = Array.from(new Set(batch.map((r) => r.ot_id)));
@@ -947,7 +1089,8 @@ function absorbListedWorkOrder(
   wo: SigmaWorkOrderListItem,
   ids: number[],
   otNumeroById: Map<number, string>,
-  generalStatusesById: Map<number, Set<string>>
+  generalStatusesById: Map<number, Set<string>>,
+  operationTypeById: Map<number, string>
 ): number | null {
   const id = parseOtId(wo.id);
   if (id == null) return null;
@@ -955,6 +1098,8 @@ function absorbListedWorkOrder(
   const otNum =
     asNonEmptyString(wo.work_order_number) ?? asNonEmptyString(wo.number);
   if (otNum) otNumeroById.set(id, otNum);
+  const operationType = asNonEmptyString(wo.operation_type);
+  if (operationType) operationTypeById.set(id, operationType);
   const rawStatus =
     typeof wo.general_status === "string" ? wo.general_status.trim() : "";
   if (!generalStatusesById.has(id)) {
@@ -1264,10 +1409,17 @@ export async function POST(request: NextRequest) {
     );
 
     const otNumeroById = new Map<number, string>();
+    const operationTypeById = new Map<number, string>();
     const generalStatusesById = new Map<number, Set<string>>();
     const ids: number[] = [];
     for (const wo of list) {
-      absorbListedWorkOrder(wo, ids, otNumeroById, generalStatusesById);
+      absorbListedWorkOrder(
+        wo,
+        ids,
+        otNumeroById,
+        generalStatusesById,
+        operationTypeById
+      );
     }
     const generalIds = Array.from(new Set(ids));
     console.log(
@@ -1325,7 +1477,8 @@ export async function POST(request: NextRequest) {
         wo,
         ids,
         otNumeroById,
-        generalStatusesById
+        generalStatusesById,
+        operationTypeById
       );
       if (id == null) continue;
       if (!generalIdSet.has(id)) preventivoOnlyIds.add(id);
@@ -1366,6 +1519,7 @@ export async function POST(request: NextRequest) {
       errors.push({ id: -1, error: preventivo.stats.list_error });
     }
 
+    const tipoOtColumn: TipoOtColumnState = { missing: false };
     const completedFacturadaIds = await loadCompletedFacturadaOtIds(uniqueIds);
     const idsToFetch = uniqueIds.filter(
       (id) =>
@@ -1479,7 +1633,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        const rows = rowsFromDetail(r.detail, fallbackOtNumero);
+        const rows = rowsFromDetail(
+          r.detail,
+          fallbackOtNumero,
+          operationTypeById.get(r.id) ?? null
+        );
         if (rows.length === 0 && !resolvedOtNumero) {
           skippedNoOtNumero += 1;
           console.warn(
@@ -1493,7 +1651,7 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          const persisted = await upsertFillNullHeaders(rows);
+          const persisted = await upsertFillNullHeaders(rows, tipoOtColumn);
           insertedAttempted += persisted;
           sparesWithDelivery += rows.length;
           if (facturada) {
@@ -1510,6 +1668,13 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+
+    const listTipoAssignments: Array<{ otId: number; tipo: string }> = [];
+    for (const [otId, raw] of operationTypeById) {
+      const tipo = TIPO_OT_POR_CLAVE[tipoClave(raw) ?? ""];
+      if (tipo) listTipoAssignments.push({ otId, tipo });
+    }
+    await fillNullTipoOt(tipoOtColumn, listTipoAssignments);
 
     diagnostics.spare_date_fields_used = Array.from(dateFieldsUsed);
     console.log(

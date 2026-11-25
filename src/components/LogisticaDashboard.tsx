@@ -80,6 +80,7 @@ export type LogisticaInversaRow = {
   fecha_registro_retorno: string | null;
   certificado_at: string | null;
   vendido_chatarrero_at: string | null;
+  tipo_ot?: string | null;
 };
 
 export type LogisticaInversaPendienteRow = {
@@ -135,6 +136,18 @@ const GESTION_ESTADO_OPTIONS: { value: GestionEstadoFiltro; label: string }[] = 
   { value: "pendiente", label: "Pendiente de Certificar" },
   { value: "vacios", label: "Vacíos" },
 ];
+
+const TIPO_OT_FILTRO_OPCIONES = [
+  { value: "", label: "Todos" },
+  { value: "Correctivo", label: "Correctivo" },
+  { value: "Garantia", label: "Garantia" },
+  { value: "Reclamo", label: "Reclamo" },
+  { value: "Siniestro", label: "Siniestro" },
+  { value: "Preventivo", label: "Preventivo" },
+  { value: "sin_clasificar", label: "Sin clasificar" },
+] as const;
+
+type TipoOtFiltro = (typeof TIPO_OT_FILTRO_OPCIONES)[number]["value"];
 
 const OT_STATUS_LABELS: Record<string, string> = {
   WAITING_FOR_ASSIGNMENT: "Espera asignación",
@@ -224,13 +237,14 @@ type HistorialInversaFilters = {
   texto: string;
   estados: GestionEstadoFiltro[];
   estadoRepuesto: string[];
+  tipoOt: TipoOtFiltro;
   desde: string;
   hasta: string;
 };
 
 function filterHistorialInversa(
   items: LogisticaInversaRow[],
-  { texto, estados, estadoRepuesto, desde, hasta }: HistorialInversaFilters
+  { texto, estados, estadoRepuesto, tipoOt, desde, hasta }: HistorialInversaFilters
 ): LogisticaInversaRow[] {
   const textQuery = normalize(texto);
   const estadoRepuestoNorm = new Set(
@@ -272,6 +286,12 @@ function filterHistorialInversa(
     if (estadoRepuestoNorm.size > 0) {
       const rowEstado = estadoRepuestoFilterKey(item.estado_repuesto);
       if (!rowEstado || !estadoRepuestoNorm.has(rowEstado)) return false;
+    }
+
+    if (tipoOt === "sin_clasificar") {
+      if (item.tipo_ot?.trim()) return false;
+    } else if (tipoOt && item.tipo_ot !== tipoOt) {
+      return false;
     }
 
     if (applyFecha) {
@@ -435,6 +455,7 @@ function mapInversaRow(row: Record<string, unknown>): LogisticaInversaRow {
     fecha_registro_retorno: asText(row.fecha_registro_retorno) || null,
     certificado_at: asText(row.certificado_at) || null,
     vendido_chatarrero_at: asText(row.vendido_chatarrero_at) || null,
+    tipo_ot: asText(row.tipo_ot) || null,
   };
 }
 
@@ -607,6 +628,8 @@ export default function LogisticaDashboard() {
   const [estadoRepuestoFiltros, setEstadoRepuestoFiltros] = useState<string[]>(
     []
   );
+  const [inversaFilterTipoOt, setInversaFilterTipoOt] =
+    useState<TipoOtFiltro>("");
   const [inversaSyncing, setInversaSyncing] = useState(false);
   const [inversaSyncMessage, setInversaSyncMessage] = useState<{
     type: "success" | "error";
@@ -1050,6 +1073,7 @@ export default function LogisticaDashboard() {
         texto: inversaFilterTexto,
         estados: gestionEstadoFiltros,
         estadoRepuesto: estadoRepuestoFiltros,
+        tipoOt: inversaFilterTipoOt,
         desde: inversaFechaDesde,
         hasta: inversaFechaHasta,
       });
@@ -1065,6 +1089,7 @@ export default function LogisticaDashboard() {
         "Fecha Ent. Rep. Nuevo": excelFecha(item.linea_fecha_entrega),
         Cliente: asText(item.cliente_nombre),
         OT: asText(item.ot_numero),
+        TIPO: item.tipo_ot?.trim() ? item.tipo_ot : "-",
         Placa: asText(item.placa),
         Código: asText(item.linea_codigo),
         Descripción: asText(item.linea_descripcion),
@@ -1661,6 +1686,7 @@ export default function LogisticaDashboard() {
         texto: inversaFilterTexto,
         estados: gestionEstadoFiltros,
         estadoRepuesto: estadoRepuestoFiltros,
+        tipoOt: inversaFilterTipoOt,
         desde: inversaFechaDesde,
         hasta: inversaFechaHasta,
       }),
@@ -1669,6 +1695,7 @@ export default function LogisticaDashboard() {
       inversaFilterTexto,
       gestionEstadoFiltros,
       estadoRepuestoFiltros,
+      inversaFilterTipoOt,
       inversaFechaDesde,
       inversaFechaHasta,
     ]
@@ -1681,6 +1708,7 @@ export default function LogisticaDashboard() {
     inversaFilterTexto,
     gestionEstadoFiltros,
     estadoRepuestoFiltros,
+    inversaFilterTipoOt,
     inversaFechaDesde,
     inversaFechaHasta,
   ]);
@@ -1794,7 +1822,7 @@ export default function LogisticaDashboard() {
       ? "relative flex flex-1 items-center justify-center gap-2 bg-surface px-3 py-2.5 text-sm font-semibold text-accent sm:px-5"
       : "relative flex flex-1 items-center justify-center gap-2 bg-transparent px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-white/60 hover:text-slate-700 sm:px-5";
 
-  const inversaColSpan = canEliminarInversa ? 11 : 10;
+  const inversaColSpan = canEliminarInversa ? 12 : 11;
   const inversaPaddingTop = inversaVirtualItems[0]?.start ?? 0;
   const inversaPaddingBottom =
     inversaVirtualizer.getTotalSize() -
@@ -2228,6 +2256,29 @@ export default function LogisticaDashboard() {
                 selected={estadoRepuestoFiltros}
                 onChange={setEstadoRepuestoFiltros}
               />
+              <label className="block shrink-0">
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Tipo OT
+                </span>
+                <select
+                  value={inversaFilterTipoOt}
+                  onChange={(e) =>
+                    setInversaFilterTipoOt(e.target.value as TipoOtFiltro)
+                  }
+                  aria-label="Tipo OT"
+                  className={`rounded-md border px-3 py-1.5 text-sm shadow-sm outline-none transition ${
+                    inversaFilterTipoOt
+                      ? "border-accent/40 bg-accent/10 text-accent"
+                      : "border-gray-300 bg-white text-slate-700"
+                  }`}
+                >
+                  {TIPO_OT_FILTRO_OPCIONES.map((opt) => (
+                    <option key={opt.value || "todos"} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
             <div className="flex shrink-0 flex-col items-stretch gap-1 sm:flex-row sm:items-center sm:justify-end lg:pb-0.5">
@@ -2439,6 +2490,7 @@ export default function LogisticaDashboard() {
                     <th className="w-[72px] px-1.5 py-2">Fecha Ent. Nuevo</th>
                     <th className="w-[130px] px-1.5 py-2">Cliente</th>
                     <th className="w-[56px] px-1.5 py-2">OT</th>
+                    <th className="w-[62px] px-1 py-2">Tipo</th>
                     <th className="w-[70px] px-1.5 py-2">Placa</th>
                     <th className="w-[100px] px-1.5 py-2">Código</th>
                     <th className="min-w-0 px-1.5 py-2">Descripción</th>
@@ -2470,7 +2522,10 @@ export default function LogisticaDashboard() {
                         {inversaItems.length === 0 &&
                         !inversaFilterTexto &&
                         gestionEstadoFiltros.length === 0 &&
-                        estadoRepuestoFiltros.length === 0
+                        estadoRepuestoFiltros.length === 0 &&
+                        !inversaFilterTipoOt &&
+                        !inversaFechaDesde &&
+                        !inversaFechaHasta
                           ? "No hay registros en la base de datos. Si en Supabase sí hay filas, revisa las políticas RLS (SELECT) de public.logistica_inversa."
                           : "No se encontraron registros"}
                       </td>
@@ -2953,6 +3008,9 @@ function FragmentRow({
                 : "-"
             }
           />
+        </td>
+        <td className="w-[62px] px-1 py-2 text-[10px] text-slate-700">
+          <TruncCell value={item.tipo_ot?.trim() ? item.tipo_ot : "-"} />
         </td>
         <td className="w-[70px] px-1.5 py-2 font-medium text-foreground">
           <TruncCell value={cellDash(item.placa)} />
