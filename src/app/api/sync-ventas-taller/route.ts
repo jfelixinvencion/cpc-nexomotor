@@ -217,14 +217,25 @@ async function insertBatches(rows: VentaTallerInsert[]) {
   }
 }
 
-function timestampFilter<T extends { eq: Function; neq: Function }>(
-  query: T,
+type FilteredQuery = PromiseLike<{
+  count: number | null;
+  error: { message: string } | null;
+}>;
+
+type TimestampQuery = {
+  eq: (column: string, value: string) => FilteredQuery;
+  neq: (column: string, value: string) => FilteredQuery;
+};
+
+function timestampFilter(
+  query: object,
   lastSyncAt: string,
   mode: "new" | "previous"
-): T {
-  return (
-    mode === "new" ? query.eq("last_sync_at", lastSyncAt) : query.neq("last_sync_at", lastSyncAt)
-  ) as T;
+): FilteredQuery {
+  const builder = query as TimestampQuery;
+  return mode === "new"
+    ? builder.eq("last_sync_at", lastSyncAt)
+    : builder.neq("last_sync_at", lastSyncAt);
 }
 
 /**
